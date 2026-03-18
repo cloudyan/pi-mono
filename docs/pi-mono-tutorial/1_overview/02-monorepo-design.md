@@ -46,7 +46,7 @@ pi-mono 使用 npm workspaces 管理 Monorepo：
 ```json
 // package.json
 {
-  "name": "pi-mono",
+  "name": "pi-monorepo",
   "workspaces": [
     "packages/*"
   ],
@@ -90,24 +90,24 @@ graph TD
         CA[pi-coding-agent]
         MOM[pi-mom]
     end
-    
+
     subgraph "UI层"
         TUI[pi-tui]
         WEB[pi-web-ui]
     end
-    
+
     subgraph "运行时层"
         AGENT[pi-agent]
     end
-    
+
     subgraph "基础层"
         AI[pi-ai]
     end
-    
+
     subgraph "独立工具"
         PODS[pi-pods]
     end
-    
+
     CA --> TUI
     CA --> AGENT
     MOM --> AGENT

@@ -38,6 +38,9 @@
   - [21. 从源码中学到的设计模式](/pi-mono-tutorial/8_learn/01-design-patterns.md)
   - [22. TypeScript 高级技巧实践](/pi-mono-tutorial/8_learn/02-typescript-tips.md)
 
+- 📚 篇章九：项目构建与发布
+  - [23. 项目构建流程：从源码到发布的完整流转](/pi-mono-tutorial/9_building/01-building-workflow.md)
+
 ---
 
 - [🔗 GitHub 仓库](https://github.com/badlogic/pi-mono)

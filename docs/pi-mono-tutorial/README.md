@@ -61,6 +61,9 @@
 - [21. 从源码中学到的设计模式](8_learn/01-design-patterns.md) ✅
 - [22. TypeScript 高级技巧实践](8_learn/02-typescript-tips.md) ✅
 
+### 篇章九：项目构建与发布 :point_down:
+- [23. 项目构建流程：从源码到发布的完整流转](9_building/01-building-workflow.md) ✅
+
 ## 有错误怎么办？
 
 如果发现文章中有错误，欢迎提 Issue 或 PR。pi-mono 是一个活跃的开源项目，文档也会持续更新。
