@@ -23,7 +23,7 @@ pi-web-ui 是 pi-mono 框架的 **Web UI 组件库**，它提供：
 ## 架构概览
 
 ```mermaid
-graph TB
+graph LR
     subgraph "pi-web-ui"
         subgraph "核心组件"
             CP[ChatPanel<br/>主聊天界面]
@@ -31,32 +31,32 @@ graph TB
             ML[MessageList<br/>消息列表]
             IC[Input<br/>输入组件]
         end
-        
+
         subgraph "Artifacts 系统"
             AP[ArtifactsPanel<br/>预览面板]
             AR[ArtifactRenderer<br/>渲染器]
             SB[Sandbox<br/>沙箱执行]
         end
-        
+
         subgraph "存储系统"
             IDB[IndexedDB<br/>本地存储]
             SS[SessionStorage<br/>会话存储]
             LS[LocalStorage<br/>本地存储]
         end
-        
+
         subgraph "工具组件"
             DLG[Dialogs<br/>对话框]
             TOOLS[Tools<br/>工具渲染]
             UTILS[Utils<br/>工具函数]
         end
     end
-    
+
     subgraph "底层依赖"
         LIT[Lit<br/>Web Components]
         TW[Tailwind CSS<br/>样式]
         PA[pi-agent<br/>Agent运行时]
     end
-    
+
     CP --> AI
     CP --> AP
     AI --> ML
@@ -67,7 +67,7 @@ graph TB
     AI --> IDB
     AI --> DLG
     AI --> TOOLS
-    
+
     CP --> LIT
     CP --> TW
 ```
@@ -89,11 +89,11 @@ export class AgentInterface extends LitElement {
   // 响应式属性
   @property({ type: String }) api = "openai/gpt-4o";
   @property({ type: Array }) tools: Tool[] = [];
-  
+
   // 内部状态
   @state() private messages: Message[] = [];
   @state() private isStreaming = false;
-  
+
   // 样式
   static styles = css`
     :host {
@@ -101,19 +101,19 @@ export class AgentInterface extends LitElement {
       flex-direction: column;
       height: 100%;
     }
-    
+
     .message-list {
       flex: 1;
       overflow-y: auto;
       padding: 1rem;
     }
-    
+
     .input-area {
       border-top: 1px solid var(--border-color);
       padding: 1rem;
     }
   `;
-  
+
   // 渲染
   render() {
     return html`
@@ -128,7 +128,7 @@ export class AgentInterface extends LitElement {
       </div>
     `;
   }
-  
+
   private renderMessage(msg: Message) {
     return html`
       <message-item
@@ -137,7 +137,7 @@ export class AgentInterface extends LitElement {
       ></message-item>
     `;
   }
-  
+
   private async handleSubmit(e: CustomEvent) {
     const text = e.detail.text;
     await this.sendMessage(text);
@@ -157,7 +157,7 @@ export const tailwindStyles = css`
   @tailwind base;
   @tailwind components;
   @tailwind utilities;
-  
+
   /* 自定义变量 */
   :host {
     --primary-color: #3b82f6;
@@ -170,7 +170,7 @@ export const tailwindStyles = css`
     --error-color: #ef4444;
     --success-color: #22c55e;
   }
-  
+
   /* 深色模式 */
   @media (prefers-color-scheme: dark) {
     :host {
@@ -198,41 +198,41 @@ import { customElement, property, state } from "lit/decorators.js";
 export class ChatPanel extends LitElement {
   @property({ type: String }) api = "openai/gpt-4o";
   @property({ type: String }) title = "Chat";
-  
+
   @state() private showArtifacts = false;
   @state() private currentArtifact: Artifact | null = null;
   @state() private isMobile = false;
-  
+
   static styles = css`
     :host {
       display: flex;
       height: 100vh;
       width: 100vw;
     }
-    
+
     .chat-container {
       flex: 1;
       display: flex;
       flex-direction: column;
       min-width: 0;
     }
-    
+
     .artifacts-panel {
       width: 50%;
       border-left: 1px solid var(--border-color);
       display: none;
     }
-    
+
     .artifacts-panel.visible {
       display: block;
     }
-    
+
     /* 移动端适配 */
     @media (max-width: 768px) {
       .chat-container {
         width: 100%;
       }
-      
+
       .artifacts-panel {
         position: fixed;
         top: 0;
@@ -242,13 +242,13 @@ export class ChatPanel extends LitElement {
         z-index: 100;
         background: var(--background-color);
       }
-      
+
       .artifacts-panel:not(.visible) {
         display: none;
       }
     }
   `;
-  
+
   render() {
     return html`
       <div class="chat-container">
@@ -256,13 +256,13 @@ export class ChatPanel extends LitElement {
           .title="${this.title}"
           @toggle-artifacts="${this.toggleArtifacts}"
         ></chat-header>
-        
+
         <agent-interface
           .api="${this.api}"
           @artifact-created="${this.handleArtifact}"
         ></agent-interface>
       </div>
-      
+
       <div class="artifacts-panel ${this.showArtifacts ? 'visible' : ''}">
         <artifacts-panel
           .artifact="${this.currentArtifact}"
@@ -271,28 +271,28 @@ export class ChatPanel extends LitElement {
       </div>
     `;
   }
-  
+
   private toggleArtifacts() {
     this.showArtifacts = !this.showArtifacts;
   }
-  
+
   private handleArtifact(e: CustomEvent) {
     this.currentArtifact = e.detail.artifact;
     this.showArtifacts = true;
   }
-  
+
   private closeArtifacts() {
     this.showArtifacts = false;
   }
-  
+
   connectedCallback() {
     super.connectedCallback();
-    
+
     // 监听窗口大小变化
     this.checkMobile();
     window.addEventListener("resize", () => this.checkMobile());
   }
-  
+
   private checkMobile() {
     this.isMobile = window.innerWidth < 768;
   }
@@ -306,12 +306,12 @@ graph LR
     subgraph "桌面端"
         D1[Chat 50%] --- D2[Artifacts 50%]
     end
-    
+
     subgraph "移动端"
         M1[Chat 100%]
         M2[Artifacts 全屏覆盖]
     end
-    
+
     D1 --> M1
     D2 -.-> M2
 ```
@@ -327,14 +327,14 @@ graph LR
 export class AgentInterface extends LitElement {
   @property({ type: String }) api = "openai/gpt-4o";
   @property({ type: Array }) tools: Tool[] = [];
-  
+
   @state() private messages: Message[] = [];
   @state() private isStreaming = false;
   @state() private currentMessageId: string | null = null;
-  
+
   private agent: Agent;
   private messageListRef: Ref<MessageList> = createRef();
-  
+
   constructor() {
     super();
     this.agent = new Agent({
@@ -342,7 +342,7 @@ export class AgentInterface extends LitElement {
       tools: this.tools,
     });
   }
-  
+
   /**
    * 发送消息
    */
@@ -355,37 +355,37 @@ export class AgentInterface extends LitElement {
       attachments,
       timestamp: Date.now(),
     };
-    
+
     this.messages = [...this.messages, userMessage];
-    
+
     // 创建助手消息占位
     const assistantMessageId = generateId();
     this.currentMessageId = assistantMessageId;
-    
+
     const assistantMessage: Message = {
       id: assistantMessageId,
       role: "assistant",
       content: "",
       timestamp: Date.now(),
     };
-    
+
     this.messages = [...this.messages, assistantMessage];
     this.isStreaming = true;
-    
+
     // 运行 Agent
     const stream = this.agent.run({
       messages: this.messages,
     });
-    
+
     // 处理流式响应
     for await (const event of stream) {
       await this.handleEvent(event, assistantMessageId);
     }
-    
+
     this.isStreaming = false;
     this.currentMessageId = null;
   }
-  
+
   /**
    * 处理事件
    */
@@ -397,26 +397,26 @@ export class AgentInterface extends LitElement {
       case "text_delta":
         this.appendToMessage(messageId, event.data);
         break;
-        
+
       case "toolcall_start":
         this.addToolCall(messageId, event);
         break;
-        
+
       case "toolcall_end":
         this.completeToolCall(messageId, event);
         break;
-        
+
       case "artifact_created":
         this.dispatchEvent(new CustomEvent("artifact-created", {
           detail: { artifact: event.artifact },
         }));
         break;
     }
-    
+
     // 自动滚动
     this.scrollToBottom();
   }
-  
+
   /**
    * 追加内容到消息
    */
@@ -428,7 +428,7 @@ export class AgentInterface extends LitElement {
       return msg;
     });
   }
-  
+
   /**
    * 自动滚动到底部
    */
@@ -437,7 +437,7 @@ export class AgentInterface extends LitElement {
       this.messageListRef.value.scrollToBottom();
     }
   }
-  
+
   render() {
     return html`
       <div class="agent-interface">
@@ -446,7 +446,7 @@ export class AgentInterface extends LitElement {
           .messages="${this.messages}"
           .currentMessageId="${this.currentMessageId}"
         ></message-list>
-        
+
         <input-area
           @submit="${(e: CustomEvent) => this.sendMessage(e.detail.text, e.detail.attachments)}"
           ?disabled="${this.isStreaming}"
@@ -469,35 +469,35 @@ const DB_VERSION = 1;
 
 export class IndexedDBStorage {
   private db: IDBDatabase | null = null;
-  
+
   /**
    * 初始化数据库
    */
   async init(): Promise<void> {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
-      
+
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         this.db = request.result;
         resolve();
       };
-      
+
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
-        
+
         // 创建消息存储
         if (!db.objectStoreNames.contains("messages")) {
           const store = db.createObjectStore("messages", { keyPath: "id" });
           store.createIndex("sessionId", "sessionId", { unique: false });
           store.createIndex("timestamp", "timestamp", { unique: false });
         }
-        
+
         // 创建会话存储
         if (!db.objectStoreNames.contains("sessions")) {
           db.createObjectStore("sessions", { keyPath: "id" });
         }
-        
+
         // 创建附件存储
         if (!db.objectStoreNames.contains("attachments")) {
           db.createObjectStore("attachments", { keyPath: "id" });
@@ -505,34 +505,34 @@ export class IndexedDBStorage {
       };
     });
   }
-  
+
   /**
    * 保存消息
    */
   async saveMessage(message: Message): Promise<void> {
     if (!this.db) await this.init();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction(["messages"], "readwrite");
       const store = transaction.objectStore("messages");
-      
+
       const request = store.put(message);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
   }
-  
+
   /**
    * 获取会话的所有消息
    */
   async getMessages(sessionId: string): Promise<Message[]> {
     if (!this.db) await this.init();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction(["messages"], "readonly");
       const store = transaction.objectStore("messages");
       const index = store.index("sessionId");
-      
+
       const request = index.getAll(sessionId);
       request.onsuccess = () => {
         const messages = request.result as Message[];
@@ -543,29 +543,29 @@ export class IndexedDBStorage {
       request.onerror = () => reject(request.error);
     });
   }
-  
+
   /**
    * 删除消息
    */
   async deleteMessage(id: string): Promise<void> {
     if (!this.db) await this.init();
-    
+
     return new Promise((resolve, reject) => {
       const transaction = this.db!.transaction(["messages"], "readwrite");
       const store = transaction.objectStore("messages");
-      
+
       const request = store.delete(id);
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
   }
-  
+
   /**
    * 清空会话
    */
   async clearSession(sessionId: string): Promise<void> {
     const messages = await this.getMessages(sessionId);
-    
+
     for (const message of messages) {
       await this.deleteMessage(message.id);
     }
@@ -596,7 +596,7 @@ export abstract class Dialog extends LitElement {
       justify-content: center;
       z-index: 1000;
     }
-    
+
     .dialog-content {
       background: var(--background-color);
       border-radius: 8px;
@@ -605,19 +605,19 @@ export abstract class Dialog extends LitElement {
       max-height: 90%;
       overflow: auto;
     }
-    
+
     .dialog-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 1rem;
     }
-    
+
     .dialog-title {
       font-size: 1.25rem;
       font-weight: 600;
     }
-    
+
     .dialog-close {
       background: none;
       border: none;
@@ -625,9 +625,9 @@ export abstract class Dialog extends LitElement {
       font-size: 1.5rem;
     }
   `;
-  
+
   abstract renderContent(): unknown;
-  
+
   render() {
     return html`
       <div class="dialog-overlay" @click="${this.handleOverlayClick}">
@@ -641,11 +641,11 @@ export abstract class Dialog extends LitElement {
       </div>
     `;
   }
-  
+
   private handleOverlayClick() {
     this.close();
   }
-  
+
   close() {
     this.dispatchEvent(new CustomEvent("dialog-close"));
   }
@@ -665,9 +665,9 @@ import { Dialog } from "./Dialog.js";
 export class ModelSelectorDialog extends Dialog {
   @property({ type: Array }) models: ModelOption[] = [];
   @property({ type: String }) selectedModel = "";
-  
+
   title = "Select Model";
-  
+
   renderContent() {
     return html`
       <div class="model-list">
@@ -683,7 +683,7 @@ export class ModelSelectorDialog extends Dialog {
       </div>
     `;
   }
-  
+
   private selectModel(modelId: string) {
     this.dispatchEvent(new CustomEvent("model-selected", {
       detail: { modelId },
@@ -715,15 +715,15 @@ export class ModelSelectorDialog extends Dialog {
     api="openai/gpt-4o"
     title="My Chat"
   ></chat-panel>
-  
+
   <script>
     const panel = document.querySelector("chat-panel");
-    
+
     // 监听事件
     panel.addEventListener("message-sent", (e) => {
       console.log("Message sent:", e.detail);
     });
-    
+
     panel.addEventListener("artifact-created", (e) => {
       console.log("Artifact created:", e.detail.artifact);
     });

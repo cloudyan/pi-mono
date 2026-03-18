@@ -13,22 +13,22 @@ pi-ai 需要统一 20+ LLM 提供商的 API，这就是典型的适配器模式�
 ```mermaid
 graph TB
     subgraph "适配器模式"
-        Client[Client<br/>stream()]
-        Target[Target<br/>ApiProvider]
-        
+        Client["Client\nstream()"]
+        Target["Target ApiProvider"]
+
         subgraph "Adapters"
-            A1[OpenAIAdapter]
-            A2[AnthropicAdapter]
-            A3[GoogleAdapter]
+            A1["OpenAIAdapter"]
+            A2["AnthropicAdapter"]
+            A3["GoogleAdapter"]
         end
-        
+
         subgraph "Adaptees"
-            O1[OpenAI API]
-            O2[Anthropic API]
-            O3[Google API]
+            O1["OpenAI API"]
+            O2["Anthropic API"]
+            O3["Google API"]
         end
     end
-    
+
     Client --> Target
     Target --> A1
     Target --> A2
@@ -86,21 +86,21 @@ pi-ai 的 Provider 注册、pi-agent 的工具注册都使用了注册表模式�
 ```mermaid
 graph TB
     subgraph "注册表模式"
-        R[Registry<br/>Map<string, T>]
-        
+        R["Registry\nMap<string, T>"]
+
         subgraph "Operations"
-            Reg[register()]
-            Get[get()]
-            List[list()]
+            Reg["register()"]
+            Get["get()"]
+            List["list()"]
         end
-        
+
         subgraph "Registered Items"
             I1[Item 1]
             I2[Item 2]
             I3[Item 3]
         end
     end
-    
+
     Reg --> R
     Get --> R
     List --> R
@@ -115,17 +115,17 @@ graph TB
 // Provider 注册表
 class ApiRegistry {
   private providers = new Map<string, ApiProvider>();
-  
+
   register(provider: ApiProvider): void {
     this.providers.set(provider.name, provider);
   }
-  
+
   get(name: string): ApiProvider {
     const provider = this.providers.get(name);
     if (!provider) throw new Error(`Unknown provider: ${name}`);
     return provider;
   }
-  
+
   list(): string[] {
     return Array.from(this.providers.keys());
   }
@@ -148,20 +148,20 @@ pi-tui 的事件系统、pi-agent 的事件流都使用了观察者模式。
 graph TB
     subgraph "观察者模式"
         Subject[Subject<br/>EventEmitter]
-        
+
         subgraph "Observers"
             O1[Observer 1]
             O2[Observer 2]
             O3[Observer 3]
         end
-        
+
         E[Event]
     end
-    
+
     O1 -.->|subscribe| Subject
     O2 -.->|subscribe| Subject
     O3 -.->|subscribe| Subject
-    
+
     E -->|emit| Subject
     Subject -->|notify| O1
     Subject -->|notify| O2
@@ -174,12 +174,12 @@ graph TB
 // 事件发射器
 class EventEmitter<T> {
   private listeners = new Set<(event: T) => void>();
-  
+
   on(listener: (event: T) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  
+
   emit(event: T): void {
     for (const listener of this.listeners) {
       listener(event);
@@ -219,13 +219,13 @@ graph TB
     subgraph "策略模式"
         Context[Context<br/>AgentLoop]
         Strategy[Strategy Interface<br/>ExecutionStrategy]
-        
+
         subgraph "Concrete Strategies"
             S1[SequentialStrategy]
             S2[ParallelStrategy]
         end
     end
-    
+
     Context --> Strategy
     Strategy --> S1
     Strategy --> S2
@@ -260,11 +260,11 @@ class ParallelStrategy implements ExecutionStrategy {
 // 使用
 class AgentLoop {
   private strategy: ExecutionStrategy;
-  
+
   setStrategy(strategy: ExecutionStrategy): void {
     this.strategy = strategy;
   }
-  
+
   async run(): Promise<void> {
     const results = await this.strategy.execute(tools);
   }
@@ -288,14 +288,14 @@ graph TB
     subgraph "工厂模式"
         Factory[Factory<br/>ArtifactFactory]
         Product[Product<br/>Artifact]
-        
+
         subgraph "Concrete Products"
             P1[HTMLArtifact]
             P2[CodeArtifact]
             P3[MarkdownArtifact]
         end
     end
-    
+
     Factory -->|create| Product
     Product --> P1
     Product --> P2
@@ -344,7 +344,7 @@ graph TB
         Decorator[Decorator<br/>@customElement]
         Concrete[Concrete Component<br/>ChatPanel]
     end
-    
+
     Component --> Concrete
     Decorator -.->|enhances| Concrete
 ```
@@ -385,20 +385,20 @@ pi-tui 的组件渲染流程、pi-agent 的 AgentLoop 都使用了模板方法�
 graph TB
     subgraph "模板方法模式"
         Abstract[Abstract Class<br/>Component]
-        
+
         subgraph "Template Methods"
-            TM1[render() - 模板方法]
-            TM2[update() - 模板方法]
+            TM1["render() - 模板方法"]
+            TM2["update() - 模板方法"]
         end
-        
+
         subgraph "Hook Methods"
-            HM1[renderContent() - 子类实现]
-            HM2[shouldUpdate() - 子类实现]
+            HM1["renderContent() - 子类实现"]
+            HM2["shouldUpdate() - 子类实现"]
         end
-        
+
         Concrete[Concrete Class<br/>TextComponent]
     end
-    
+
     Abstract --> TM1
     Abstract --> TM2
     TM1 --> HM1
@@ -415,14 +415,14 @@ abstract class Component {
   render(): string[][] {
     // 1. 准备
     this.beforeRender();
-    
+
     // 2. 子类实现的具体渲染
     const content = this.renderContent();
-    
+
     // 3. 后处理
     return this.afterRender(content);
   }
-  
+
   // 钩子方法
   protected beforeRender(): void {}
   protected abstract renderContent(): string[][];
@@ -459,7 +459,7 @@ graph TB
         G2[Getter 2]
         G3[Getter 3]
     end
-    
+
     G1 -->|getInstance| S
     G2 -->|getInstance| S
     G3 -->|getInstance| S
@@ -471,9 +471,9 @@ graph TB
 // 单例实现
 class HookManager {
   private static instance: HookManager;
-  
+
   private constructor() {}
-  
+
   static getInstance(): HookManager {
     if (!HookManager.instance) {
       HookManager.instance = new HookManager();
@@ -502,17 +502,17 @@ pi-tui 的组件树、pi-coding-agent 的会话条目树都使用了组合模式
 graph TB
     subgraph "组合模式"
         Component[Component<br/>SessionEntry]
-        
+
         subgraph "Leaf"
             L1[MessageEntry]
             L2[ToolResultEntry]
         end
-        
+
         subgraph "Composite"
             C1[BranchEntry]
         end
     end
-    
+
     Component --> L1
     Component --> L2
     Component --> C1
@@ -539,11 +539,11 @@ class MessageEntry implements SessionEntry {
 // 组合节点
 class BranchEntry implements SessionEntry {
   private children: SessionEntry[] = [];
-  
+
   addChild(child: SessionEntry): void {
     this.children.push(child);
   }
-  
+
   getChildren(): SessionEntry[] {
     return this.children;
   }
@@ -567,16 +567,16 @@ graph TB
     subgraph "命令模式"
         Invoker[Invoker<br/>KeybindingManager]
         Command[Command Interface]
-        
+
         subgraph "Concrete Commands"
             C1[CopyCommand]
             C2[PasteCommand]
             C3[UndoCommand]
         end
-        
+
         Receiver[Receiver<br/>Editor]
     end
-    
+
     Invoker --> Command
     Command --> C1
     Command --> C2
@@ -598,17 +598,17 @@ interface Command {
 // 具体命令
 class WriteCommand implements Command {
   private previousContent: string;
-  
+
   constructor(
     private editor: Editor,
     private content: string
   ) {}
-  
+
   execute(): void {
     this.previousContent = this.editor.getContent();
     this.editor.setContent(this.content);
   }
-  
+
   undo(): void {
     this.editor.setContent(this.previousContent);
   }
@@ -617,12 +617,12 @@ class WriteCommand implements Command {
 // 调用者
 class Editor {
   private history: Command[] = [];
-  
+
   executeCommand(command: Command): void {
     command.execute();
     this.history.push(command);
   }
-  
+
   undo(): void {
     const command = this.history.pop();
     if (command) {

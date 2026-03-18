@@ -23,7 +23,7 @@ AgentLoop 是 Agent 的**执行引擎**，负责：
 ## 架构概览
 
 ```mermaid
-graph TB
+graph LR
     subgraph "AgentLoop"
         subgraph "配置层"
             C1[convertToLlm<br/>消息转换]
@@ -31,7 +31,7 @@ graph TB
             C3[getApiKey<br/>动态获取API Key]
             C4[beforeToolCall/afterToolCall<br/>工具钩子]
         end
-        
+
         subgraph "执行层"
             E1[获取待处理消息]
             E2[转换为LLM消息]
@@ -40,7 +40,7 @@ graph TB
             E5[执行工具调用]
             E6[发送工具结果]
         end
-        
+
         subgraph "事件层"
             EV1[agent_start/agent_end]
             EV2[turn_start/turn_end]
@@ -48,19 +48,19 @@ graph TB
             EV4[tool_execution_start/end]
         end
     end
-    
+
     C1 --> E2
     C2 --> E3
     C3 --> E3
     C4 --> E5
-    
+
     E1 --> E2
     E2 --> E3
     E3 --> E4
     E4 --> E5
     E5 --> E6
     E6 --> E1
-    
+
     E1 --> EV1
     E3 --> EV2
     E4 --> EV3
@@ -77,31 +77,31 @@ AgentLoop 通过配置对象实现高度可定制：
 export interface AgentLoopConfig {
   /** 将 AgentMessage 转换为 LLM Message */
   convertToLlm: (messages: AgentMessage[]) => Message[];
-  
+
   /** 转换上下文（如添加系统提示） */
   transformContext?: (messages: Message[]) => Message[];
-  
+
   /** 动态获取 API Key */
   getApiKey?: () => string | undefined;
-  
+
   /** 获取引导消息 */
   getSteeringMessages?: () => AgentMessage[];
-  
+
   /** 获取跟进消息 */
   getFollowUpMessages?: () => AgentMessage[];
-  
+
   /** 工具调用前钩子 */
   beforeToolCall?: (toolCall: ToolCall) => Promise<void>;
-  
+
   /** 工具调用后钩子 */
   afterToolCall?: (toolCall: ToolCall, result: string) => Promise<void>;
-  
+
   /** 事件处理器 */
   onEvent?: (event: AgentMessageEvent) => void;
-  
+
   /** 最大迭代次数（防止无限循环） */
   maxIterations?: number;
-  
+
   /** 工具执行模式 */
   toolExecutionMode?: "sequential" | "parallel";
 }
@@ -120,46 +120,46 @@ export async function* runAgentLoop(
 ): AsyncGenerator<AgentMessageEvent> {
   const maxIterations = config.maxIterations ?? 10;
   let iteration = 0;
-  
+
   // 发送 agent_start 事件
   yield { type: "agent_start", agentId: generateId() };
-  
+
   try {
     while (iteration < maxIterations) {
       iteration++;
-      
+
       // 发送 turn_start 事件
       const turnId = generateId();
       yield { type: "turn_start", turnId };
-      
+
       // 1. 获取待处理消息
       const steeringMessages = config.getSteeringMessages?.() ?? [];
       const followUpMessages = config.getFollowUpMessages?.() ?? [];
       const pendingMessages = [...steeringMessages, ...followUpMessages];
-      
+
       if (pendingMessages.length === 0) {
         // 没有消息，结束循环
         break;
       }
-      
+
       // 2. 转换为 LLM 消息
       let llmMessages = config.convertToLlm(pendingMessages);
-      
+
       // 3. 转换上下文
       if (config.transformContext) {
         llmMessages = config.transformContext(llmMessages);
       }
-      
+
       // 4. 调用 LLM
       const stream = stream(options.api, {
         ...options,
         messages: llmMessages,
         apiKey: config.getApiKey?.() ?? options.apiKey,
       });
-      
+
       // 5. 处理流式响应
       const result = yield* processStream(stream, config);
-      
+
       // 6. 如果有工具调用，执行它们
       if (result.toolCalls.length > 0) {
         yield* executeTools(result.toolCalls, config);
@@ -167,14 +167,14 @@ export async function* runAgentLoop(
         // 没有工具调用，本轮结束
         break;
       }
-      
+
       // 发送 turn_end 事件
       yield { type: "turn_end", turnId };
     }
-    
+
     // 发送 agent_end 事件
     yield { type: "agent_end", agentId: "...", reason: "completed" };
-    
+
   } catch (error) {
     // 发送错误事件
     yield { type: "agent_end", agentId: "...", reason: "error" };
@@ -193,11 +193,11 @@ async function* processStream(
   let content = "";
   const toolCalls: Map<string, Partial<ToolCall>> = new Map();
   let currentToolCall: string | null = null;
-  
+
   // 发送 message_start
   const messageId = generateId();
   yield { type: "message_start", messageId, role: "assistant" };
-  
+
   for await (const event of stream) {
     // 转发 pi-ai 的事件
     switch (event.type) {
@@ -210,7 +210,7 @@ async function* processStream(
           delta: event.data,
         };
         break;
-        
+
       case "toolcall_start":
         currentToolCall = event.id;
         toolCalls.set(event.id, {
@@ -219,7 +219,7 @@ async function* processStream(
           arguments: {},
         });
         break;
-        
+
       case "toolcall_delta":
         if (currentToolCall) {
           const toolCall = toolCalls.get(currentToolCall);
@@ -230,23 +230,23 @@ async function* processStream(
           }
         }
         break;
-        
+
       case "toolcall_end":
         currentToolCall = null;
         break;
-        
+
       case "done":
         // 流结束
         break;
     }
-    
+
     // 调用配置的 onEvent
     config.onEvent?.(event);
   }
-  
+
   // 发送 message_end
   yield { type: "message_end", messageId, finalContent: content };
-  
+
   // 返回结果
   return {
     content,
@@ -263,7 +263,7 @@ async function* executeTools(
   config: AgentLoopConfig
 ): AsyncGenerator<AgentMessageEvent> {
   const mode = config.toolExecutionMode ?? "sequential";
-  
+
   if (mode === "sequential") {
     // 顺序执行
     for (const toolCall of toolCalls) {
@@ -289,31 +289,31 @@ async function* executeSingleTool(
     toolName: toolCall.name,
     arguments: toolCall.arguments,
   };
-  
+
   // 调用 beforeToolCall 钩子
   if (config.beforeToolCall) {
     await config.beforeToolCall(toolCall);
   }
-  
+
   // 执行工具
   const startTime = Date.now();
   let result: string;
   let isError = false;
-  
+
   try {
     result = await executeTool(toolCall);
   } catch (error) {
     result = error instanceof Error ? error.message : String(error);
     isError = true;
   }
-  
+
   const duration = Date.now() - startTime;
-  
+
   // 调用 afterToolCall 钩子
   if (config.afterToolCall) {
     await config.afterToolCall(toolCall, result);
   }
-  
+
   // 发送 tool_execution_end
   yield {
     type: "tool_execution_end",
@@ -400,10 +400,10 @@ const config: AgentLoopConfig = {
       content: [{ type: "text", text: m.content }],
     }));
   },
-  
+
   getSteeringMessages: () => agent.getSteeringQueue(),
   getFollowUpMessages: () => agent.getFollowUpQueue(),
-  
+
   onEvent: (event) => {
     console.log("Event:", event.type);
   },
@@ -422,7 +422,7 @@ const config: AgentLoopConfig = {
     };
     return [systemMessage, ...convertMessages(messages)];
   },
-  
+
   transformContext: (messages) => {
     // 截断过长的上下文
     const maxMessages = 20;
@@ -431,22 +431,22 @@ const config: AgentLoopConfig = {
     }
     return messages;
   },
-  
+
   getApiKey: () => {
     // 动态获取 API Key（如从环境变量或配置服务）
     return process.env.OPENAI_API_KEY;
   },
-  
+
   beforeToolCall: async (toolCall) => {
     console.log(`Executing tool: ${toolCall.name}`);
     // 可以在这里做权限检查
   },
-  
+
   afterToolCall: async (toolCall, result) => {
     console.log(`Tool result: ${result}`);
     // 可以在这里记录日志
   },
-  
+
   maxIterations: 5,  // 最多 5 轮对话
   toolExecutionMode: "parallel",  // 并行执行工具
 };
@@ -466,9 +466,9 @@ const config: AgentLoopConfig = {
 async function* runAgentLoop(config: AgentLoopConfig, options: StreamOptions) {
   try {
     yield { type: "agent_start", agentId };
-    
+
     // ... 主循环
-    
+
   } catch (error) {
     // 发送错误事件
     yield {
@@ -476,7 +476,7 @@ async function* runAgentLoop(config: AgentLoopConfig, options: StreamOptions) {
       agentId,
       reason: "error",
     };
-    
+
     // 重新抛出，让上层处理
     throw error;
   }
