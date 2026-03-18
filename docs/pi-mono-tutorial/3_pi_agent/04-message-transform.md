@@ -1,560 +1,723 @@
-# 10. 消息转换与上下文管理
+# 消息转换与上下文管理
 
-问下大家，你有没有想过，Agent 中的消息是怎么传递给 LLM 的？
+> **难度：进阶** | **预计阅读时间：20 分钟**
 
-OpenClaw 刚开始以为就是直接转发，但深入了解后发现，这里面的门道可多了：
-- AgentMessage 和 LLM Message 的格式不一样
-- 需要处理消息队列（steeringQueue + followUpQueue）
-- 上下文太长需要截断
-- 要添加系统提示
+上一章我们了解了工具执行机制。本章将深入消息转换和上下文管理——这是 Agent 灵活性的关键所在。
 
-pi-agent 的消息转换系统设计得非常灵活，今天我们就来深入剖析。
+## 为什么需要消息转换？
 
-## 消息类型对比
-
-### AgentMessage vs LLM Message
+想象你在构建一个 IDE 插件：
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    AgentMessage                             │
-│                                                             │
-│  {                                                          │
-│    type: "user" | "assistant" | "tool_result",             │
-│    id: string,                                             │
-│    content: string,                                        │
-│    timestamp: number,                                      │
-│    toolCallId?: string,  // tool_result 特有               │
-│    isError?: boolean,    // tool_result 特有               │
-│  }                                                          │
-└─────────────────────────────────────────────────────────────┘
-                            │
-                            │ convertToLlm()
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    LLM Message                              │
-│                                                             │
-│  {                                                          │
-│    role: "user" | "assistant" | "system" | "tool",         │
-│    content: Content[]  // TextContent | ImageContent...    │
-│  }                                                          │
+│                      IDE 界面                                │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  用户: 帮我优化这段代码                                 │ │
+│  │                                                       │ │
+│  │  [代码编辑器 - 显示当前文件]                             │ │
+│  │  ┌─────────────────────────────────────────────────┐ │ │
+│  │  │ function calculate(x) {                         │ │ │
+│  │  │   return x * 2;  // 需要优化                   │ │ │
+│  │  │ }                                               │ │ │
+│  │  └─────────────────────────────────────────────────┘ │ │
+│  │                                                       │ │
+│  │  AI: 我来帮你优化...                                  │ │
+│  │  [思考过程...]                                        │ │
+│  │  [建议的修改]                                         │ │
+│  └───────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 核心差异
+在这个场景中：
+- **UI 需要显示**：代码编辑器、思考过程、修改建议
+- **但 LLM 只需要看到**：用户问题和当前代码
 
-| 特性 | AgentMessage | LLM Message |
-|-----|-------------|-------------|
-| 角色命名 | `type: "user"` | `role: "user"` |
-| 内容格式 | `string` | `Content[]` |
-| 元数据 | `id`, `timestamp` | 无 |
-| 工具结果 | `tool_result` 类型 | `role: "tool"` |
+这就是消息转换的价值所在。
 
-## 消息转换流程
-
-### 完整转换流程
+## 消息转换架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   消息队列                                   │
-│  ┌─────────────────┐  ┌─────────────────┐                   │
-│  │  steeringQueue  │  │  followUpQueue  │                   │
-│  │  [用户消息]     │  │  [工具结果]     │                   │
-│  └────────┬────────┘  └────────┬────────┘                   │
-└───────────┼────────────────────┼─────────────────────────────┘
-            │                    │
-            └────────────────────┘
-                         │
-                         ▼
-            ┌─────────────────────┐
-            │   合并消息队列      │
-            │   [...steering,     │
-            │    ...followUp]     │
-            └──────────┬──────────┘
-                       │
-                       ▼
-            ┌─────────────────────┐
-            │   convertToLlm()    │
-            │   转换为 LLM 格式   │
-            └──────────┬──────────┘
-                       │
-                       ▼
-            ┌─────────────────────┐
-            │  transformContext() │
-            │  - 添加系统提示     │
-            │  - 截断上下文       │
-            │  - 其他处理         │
-            └──────────┬──────────┘
-                       │
-                       ▼
-            ┌─────────────────────┐
-            │   发送给 LLM        │
-            └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    消息转换流程                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  AgentMessage[]                                                  │
+│    │                                                            │
+│    ▼                                                            │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              transformContext()                          │   │
+│  │  可选：修剪消息历史、添加元信息等                          │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│    │                                                            │
+│    ▼                                                            │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              convertToLlm()                              │   │
+│  │  必需：转换为 LLM 兼容格式，过滤自定义消息                 │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│    │                                                            │
+│    ▼                                                            │
+│  Message[]                                                       │
+│    │                                                            │
+│    ▼                                                            │
+│  LLM                                                             │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## convertToLlm 实现
+## 两层转换
 
-### 基础转换
+### 第一层：transformContext（可选）
+
+用于在发送给 LLM 之前修改消息列表：
 
 ```typescript
-// packages/agent/src/message-utils.ts
+const agent = new Agent({
+  transformContext: async (messages, signal) => {
+    // 1. 修剪过长的历史
+    const trimmed = trimMessages(messages, { maxTokens: 8000 });
+    
+    // 2. 添加当前文件上下文
+    const currentFile = await getCurrentFile();
+    const contextMessage: UserMessage = {
+      role: "user",
+      content: [{ 
+        type: "text", 
+        text: `当前文件: ${currentFile.path}\n\n${currentFile.content}` 
+      }],
+      timestamp: Date.now(),
+    };
+    
+    return [...trimmed, contextMessage];
+  },
+});
+```
 
-import type { Message, Content, TextContent } from "@mariozechner/pi-ai";
-import type { AgentMessage } from "./types.js";
+**典型用途**：
+- 修剪消息历史（控制 token 数量）
+- 添加动态上下文（当前文件、选中代码等）
+- 注入系统指令
+- 消息重排序
 
-/**
- * 将 AgentMessage 转换为 LLM Message
- */
-export function convertToLlm(messages: AgentMessage[]): Message[] {
-  return messages.map(convertSingleMessage);
+### 第二层：convertToLlm（必需）
+
+将 `AgentMessage[]` 转换为 `Message[]`，这是必须提供的：
+
+```typescript
+const agent = new Agent({
+  convertToLlm: (messages) => {
+    return messages.flatMap((m) => {
+      // 1. 过滤掉 UI 专用消息
+      if (m.role === "codePreview" || m.role === "notification") {
+        return [];
+      }
+      
+      // 2. 转换自定义消息为标准消息
+      if (m.role === "thinking") {
+        // 将思考消息转换为文本
+        return [{
+          role: "assistant",
+          content: [{ type: "text", text: m.content }],
+          timestamp: m.timestamp,
+        }];
+      }
+      
+      // 3. 标准消息直接透传
+      if (isStandardMessage(m)) {
+        return [m];
+      }
+      
+      // 4. 未知消息类型处理
+      console.warn(`Unknown message role: ${m.role}`);
+      return [];
+    });
+  },
+});
+```
+
+## 自定义消息类型
+
+通过 TypeScript 的声明合并扩展 `CustomAgentMessages`：
+
+### 1. 声明扩展
+
+```typescript
+// types/custom-messages.ts
+
+declare module "@mariozechner/pi-agent-core" {
+  interface CustomAgentMessages {
+    // 代码预览消息
+    codePreview: {
+      role: "codePreview";
+      language: string;
+      code: string;
+      timestamp: number;
+    };
+    
+    // 思考过程消息
+    thinking: {
+      role: "thinking";
+      content: string;
+      timestamp: number;
+    };
+    
+    // 系统通知
+    notification: {
+      role: "notification";
+      text: string;
+      level: "info" | "warning" | "error";
+      timestamp: number;
+    };
+    
+    // 文件引用
+    fileReference: {
+      role: "fileReference";
+      path: string;
+      range?: { start: number; end: number };
+      timestamp: number;
+    };
+  }
+}
+```
+
+### 2. 使用自定义消息
+
+```typescript
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+
+// 现在 AgentMessage 包含自定义类型
+const codePreview: AgentMessage = {
+  role: "codePreview",
+  language: "typescript",
+  code: "const x = 1;",
+  timestamp: Date.now(),
+};
+
+const thinking: AgentMessage = {
+  role: "thinking",
+  content: "让我分析一下这个问题...",
+  timestamp: Date.now(),
+};
+
+// 添加到 Agent
+agent.appendMessage(codePreview);
+agent.appendMessage(thinking);
+```
+
+### 3. 转换函数实现
+
+```typescript
+const agent = new Agent({
+  convertToLlm: (messages) => {
+    return messages.flatMap((m) => {
+      switch (m.role) {
+        // UI 专用消息：过滤掉
+        case "codePreview":
+        case "notification":
+        case "fileReference":
+          return [];
+        
+        // 思考消息：转换为助手文本
+        case "thinking":
+          return [{
+            role: "assistant",
+            content: [{ type: "text", text: `<thinking>${m.content}</thinking>` }],
+            timestamp: m.timestamp,
+          }];
+        
+        // 标准消息：直接透传
+        case "user":
+        case "assistant":
+        case "toolResult":
+          return [m];
+        
+        default:
+          return [];
+      }
+    });
+  },
+});
+```
+
+## 上下文修剪策略
+
+长对话会消耗大量 token，需要智能修剪：
+
+### 策略一：保留最近 N 条
+
+```typescript
+function keepRecentMessages(messages: AgentMessage[], count: number): AgentMessage[] {
+  return messages.slice(-count);
 }
 
-function convertSingleMessage(agentMsg: AgentMessage): Message {
-  // 转换 role
-  const role = convertRole(agentMsg.type);
+const agent = new Agent({
+  transformContext: (messages) => keepRecentMessages(messages, 10),
+});
+```
+
+**优点**：简单直观
+**缺点**：可能丢失重要上下文
+
+### 策略二：按 Token 数量修剪
+
+```typescript
+import { countMessageTokens } from "@mariozechner/pi-ai";
+
+function trimByTokens(
+  messages: AgentMessage[], 
+  maxTokens: number
+): AgentMessage[] {
+  let totalTokens = 0;
+  const result: AgentMessage[] = [];
   
-  // 转换 content
-  const content: Content[] = [
-    { type: "text", text: agentMsg.content },
+  // 从后向前遍历，保留最新消息
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const tokens = countMessageTokens(messages[i]);
+    if (totalTokens + tokens > maxTokens) break;
+    
+    result.unshift(messages[i]);
+    totalTokens += tokens;
+  }
+  
+  return result;
+}
+
+const agent = new Agent({
+  transformContext: (messages) => trimByTokens(messages, 4000),
+});
+```
+
+**优点**：精确控制 token 使用
+**缺点**：需要计算 token
+
+### 策略三：智能摘要
+
+```typescript
+async function summarizeOldMessages(
+  messages: AgentMessage[],
+  model: Model<any>
+): Promise<AgentMessage[]> {
+  const threshold = 20; // 超过 20 条开始摘要
+  
+  if (messages.length <= threshold) {
+    return messages;
+  }
+  
+  // 保留最近的对话
+  const recent = messages.slice(-10);
+  const old = messages.slice(0, -10);
+  
+  // 生成摘要
+  const summary = await generateSummary(old, model);
+  
+  return [
+    {
+      role: "assistant",
+      content: [{ type: "text", text: `[Earlier conversation summary: ${summary}]` }],
+      timestamp: old[old.length - 1].timestamp,
+    },
+    ...recent,
   ];
-  
-  return { role, content };
-}
-
-function convertRole(type: AgentMessage["type"]): Message["role"] {
-  switch (type) {
-    case "user":
-      return "user";
-    case "assistant":
-      return "assistant";
-    case "tool_result":
-      return "tool";
-    default:
-      throw new Error(`Unknown message type: ${type}`);
-  }
 }
 ```
 
-### 带工具调用的转换
+**优点**：保留更多信息
+**缺点**：需要额外的 LLM 调用
+
+### 策略四：保留关键消息
 
 ```typescript
-function convertSingleMessage(agentMsg: AgentMessage): Message {
-  const role = convertRole(agentMsg.type);
-  const content: Content[] = [];
-  
-  // 添加文本内容
-  if (agentMsg.content) {
-    content.push({ type: "text", text: agentMsg.content });
-  }
-  
-  // 如果是助手消息且包含工具调用
-  if (agentMsg.type === "assistant" && agentMsg.toolCalls) {
-    for (const toolCall of agentMsg.toolCalls) {
-      content.push({
-        type: "tool_call",
-        id: toolCall.id,
-        name: toolCall.name,
-        arguments: toolCall.arguments,
-      });
-    }
-  }
-  
-  // 如果是工具结果消息
-  if (agentMsg.type === "tool_result") {
-    content.push({
-      type: "tool_result",
-      toolCallId: agentMsg.toolCallId!,
-      content: agentMsg.content,
-      isError: agentMsg.isError ?? false,
-    });
-  }
-  
-  return { role, content };
-}
-```
-
-## 上下文管理
-
-### transformContext 的作用
-
-```typescript
-export interface AgentLoopConfig {
-  /**
-   * 转换上下文
-   * 可以用来：
-   * - 添加系统提示
-   * - 截断过长的上下文
-   * - 修改消息内容
-   */
-  transformContext?: (messages: Message[]) => Message[];
-}
-```
-
-### 添加系统提示
-
-```typescript
-function addSystemPrompt(messages: Message[]): Message[] {
-  const systemMessage: Message = {
-    role: "system",
-    content: [
-      {
-        type: "text",
-        text: `You are a helpful coding assistant.
-You can use tools to help the user.
-Always be concise and helpful.`,
-      },
-    ],
+function preserveImportantMessages(messages: AgentMessage[]): AgentMessage[] {
+  // 标记重要消息
+  const isImportant = (m: AgentMessage) => {
+    // 系统提示变更
+    if (m.role === "assistant" && m.content.some(c => 
+      c.type === "text" && c.text.includes("system prompt")
+    )) return true;
+    
+    // 工具结果（特别是错误）
+    if (m.role === "toolResult" && m.isError) return true;
+    
+    // 用户明确标记的
+    if (m.role === "user" && m.content.some(c =>
+      c.type === "text" && c.text.startsWith("[IMPORTANT]")
+    )) return true;
+    
+    return false;
   };
   
-  // 插入到消息列表开头
-  return [systemMessage, ...messages];
-}
-
-const config: AgentLoopConfig = {
-  transformContext: addSystemPrompt,
-};
-```
-
-### 上下文截断
-
-```typescript
-/**
- * 截断上下文，保留最近的 N 条消息
- */
-function truncateContext(maxMessages: number) {
-  return (messages: Message[]): Message[] => {
-    if (messages.length <= maxMessages) {
-      return messages;
-    }
-    
-    // 保留系统消息（如果有）
-    const systemMessages = messages.filter(m => m.role === "system");
-    const otherMessages = messages.filter(m => m.role !== "system");
-    
-    // 从其他消息中保留最近的
-    const recentMessages = otherMessages.slice(-maxMessages);
-    
-    return [...systemMessages, ...recentMessages];
-  };
-}
-
-const config: AgentLoopConfig = {
-  transformContext: truncateContext(20),  // 保留最近 20 条
-};
-```
-
-### 按 Token 截断
-
-```typescript
-/**
- * 按 Token 数量截断上下文
- */
-function truncateByTokens(maxTokens: number) {
-  return (messages: Message[]): Message[] => {
-    let totalTokens = 0;
-    const result: Message[] = [];
-    
-    // 从后往前遍历，优先保留最近的消息
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      const tokens = estimateTokens(message);
-      
-      if (totalTokens + tokens > maxTokens) {
-        break;
-      }
-      
-      totalTokens += tokens;
-      result.unshift(message);  // 插入到开头
-    }
-    
-    return result;
-  };
-}
-
-/**
- * 估算消息的 Token 数量（简化版）
- */
-function estimateTokens(message: Message): number {
-  let text = "";
-  for (const content of message.content) {
-    if (content.type === "text") {
-      text += content.text;
-    }
-  }
+  // 保留重要消息 + 最近消息
+  const important = messages.filter(isImportant);
+  const recent = messages.slice(-5);
   
-  // 粗略估算：1 token ≈ 4 个字符
-  return Math.ceil(text.length / 4);
-}
-
-const config: AgentLoopConfig = {
-  transformContext: truncateByTokens(8000),  // 保留 8000 token
-};
-```
-
-## 消息队列管理
-
-### steeringQueue vs followUpQueue
-
-```typescript
-export class Agent {
-  // 引导消息队列 - 高优先级
-  private steeringQueue: AgentMessage[] = [];
-  
-  // 跟进消息队列 - 普通优先级
-  private followUpQueue: AgentMessage[] = [];
-  
-  /**
-   * 添加引导消息
-   * 用于：用户输入、系统指令
-   */
-  addSteeringMessage(message: AgentMessage): void {
-    this.steeringQueue.push(message);
-  }
-  
-  /**
-   * 添加跟进消息
-   * 用于：工具结果、自动生成的消息
-   */
-  addFollowUpMessage(message: AgentMessage): void {
-    this.followUpQueue.push(message);
-  }
-  
-  /**
-   * 获取待处理消息
-   * steeringQueue 在前，followUpQueue 在后
-   */
-  getPendingMessages(): AgentMessage[] {
-    return [...this.steeringQueue, ...this.followUpQueue];
-  }
-  
-  /**
-   * 清空队列
-   */
-  clearQueues(): void {
-    this.steeringQueue = [];
-    this.followUpQueue = [];
-  }
-  
-  /**
-   * 将队列消息移到历史记录
-   */
-  commitQueues(): void {
-    const pending = this.getPendingMessages();
-    this.history.push(...pending);
-    this.clearQueues();
-  }
-}
-```
-
-### 为什么需要两个队列？
-
-**场景示例：**
-
-```
-用户: "查一下北京天气"
-    │
-    ▼
-steeringQueue: [{type: "user", content: "查一下北京天气"}]
-    │
-    ▼
-Agent 调用 LLM
-    │
-    ▼
-LLM 决定调用工具: get_weather({city: "北京"})
-    │
-    ▼
-执行工具，得到结果: "晴天 25°C"
-    │
-    ▼
-followUpQueue: [{type: "tool_result", content: "晴天 25°C"}]
-    │
-    ▼
-再次调用 LLM
-    │
-    ▼
-LLM 回复: "北京今天晴天，25°C"
-    │
-    ▼
-提交到历史记录
-```
-
-**好处：**
-1. **优先级控制** - steering 消息优先处理
-2. **循环控制** - 可以控制是否继续循环
-3. **清晰分离** - 用户输入和自动消息分开
-
-## 完整配置示例
-
-### 基础配置
-
-```typescript
-import { AgentLoopConfig } from "@mariozechner/pi-agent-core";
-
-const config: AgentLoopConfig = {
-  // 消息转换
-  convertToLlm: (messages) => {
-    return messages.map(msg => {
-      const roleMap = {
-        user: "user",
-        assistant: "assistant",
-        tool_result: "tool",
-      };
-      
-      return {
-        role: roleMap[msg.type],
-        content: [{ type: "text", text: msg.content }],
-      };
-    });
-  },
-  
-  // 上下文转换
-  transformContext: (messages) => {
-    // 1. 添加系统提示
-    const systemMessage = {
-      role: "system",
-      content: [{ type: "text", text: "You are a helpful assistant." }],
-    };
-    
-    // 2. 截断上下文（保留最近 20 条）
-    const recentMessages = messages.slice(-20);
-    
-    return [systemMessage, ...recentMessages];
-  },
-  
-  // 获取消息队列
-  getSteeringMessages: () => agent.getSteeringQueue(),
-  getFollowUpMessages: () => agent.getFollowUpQueue(),
-};
-```
-
-### 高级配置
-
-```typescript
-const config: AgentLoopConfig = {
-  convertToLlm: (messages) => {
-    return messages.map(msg => {
-      const content: Content[] = [];
-      
-      // 处理文本内容
-      if (msg.content) {
-        content.push({ type: "text", text: msg.content });
-      }
-      
-      // 处理工具调用
-      if (msg.type === "assistant" && msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          content.push({
-            type: "tool_call",
-            id: tc.id,
-            name: tc.name,
-            arguments: tc.arguments,
-          });
-        }
-      }
-      
-      // 处理工具结果
-      if (msg.type === "tool_result") {
-        content.push({
-          type: "tool_result",
-          toolCallId: msg.toolCallId,
-          content: msg.content,
-          isError: msg.isError,
-        });
-      }
-      
-      return {
-        role: msg.type === "user" ? "user" 
-            : msg.type === "assistant" ? "assistant" 
-            : "tool",
-        content,
-      };
-    });
-  },
-  
-  transformContext: (messages) => {
-    // 1. 保留系统消息
-    const systemMsgs = messages.filter(m => m.role === "system");
-    const otherMsgs = messages.filter(m => m.role !== "system");
-    
-    // 2. 按 token 截断
-    let tokens = 0;
-    const maxTokens = 8000;
-    const result: Message[] = [];
-    
-    for (let i = otherMsgs.length - 1; i >= 0; i--) {
-      const msg = otherMsgs[i];
-      const msgTokens = estimateTokens(msg);
-      
-      if (tokens + msgTokens > maxTokens) {
-        // 添加截断提示
-        result.unshift({
-          role: "system",
-          content: [{ 
-            type: "text", 
-            text: "... (earlier messages truncated)" 
-          }],
-        });
-        break;
-      }
-      
-      tokens += msgTokens;
-      result.unshift(msg);
-    }
-    
-    return [...systemMsgs, ...result];
-  },
-  
-  getSteeringMessages: () => agent.getSteeringQueue(),
-  getFollowUpMessages: () => agent.getFollowUpQueue(),
-};
-```
-
-## 多模态消息处理
-
-### 处理图片
-
-```typescript
-function convertToLlm(messages: AgentMessage[]): Message[] {
-  return messages.map(msg => {
-    const content: Content[] = [];
-    
-    // 如果有附件
-    if (msg.attachments) {
-      for (const attachment of msg.attachments) {
-        if (attachment.type === "image") {
-          content.push({
-            type: "image",
-            source: attachment.source,  // "base64" | "url"
-            data: attachment.data,
-            mimeType: attachment.mimeType,
-          });
-        }
-      }
-    }
-    
-    // 添加文本
-    if (msg.content) {
-      content.push({ type: "text", text: msg.content });
-    }
-    
-    return {
-      role: msg.type === "user" ? "user" : "assistant",
-      content,
-    };
+  // 合并去重
+  const seen = new Set<string>();
+  return [...important, ...recent].filter(m => {
+    const key = `${m.role}-${m.timestamp}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 ```
 
+## 动态上下文注入
+
+### 场景一：代码编辑器
+
+```typescript
+const agent = new Agent({
+  transformContext: async (messages, signal) => {
+    // 获取当前编辑器状态
+    const editorState = await getEditorState();
+    
+    // 构建上下文消息
+    const contextParts: string[] = [];
+    
+    if (editorState.currentFile) {
+      contextParts.push(`Current file: ${editorState.currentFile.path}`);
+      contextParts.push(`\n\`\`\`${editorState.currentFile.language}`);
+      contextParts.push(editorState.currentFile.content);
+      contextParts.push(`\`\`\``);
+    }
+    
+    if (editorState.selectedText) {
+      contextParts.push(`\nSelected text:`);
+      contextParts.push(`\`\`\``);
+      contextParts.push(editorState.selectedText);
+      contextParts.push(`\`\`\``);
+    }
+    
+    const contextMessage: UserMessage = {
+      role: "user",
+      content: [{ type: "text", text: contextParts.join("\n") }],
+      timestamp: Date.now(),
+    };
+    
+    // 替换最后一条上下文消息（如果存在）
+    const withoutOldContext = messages.filter(m => 
+      !(m.role === "user" && m.content[0]?.text?.startsWith("Current file:"))
+    );
+    
+    return [...withoutOldContext, contextMessage];
+  },
+});
+```
+
+### 场景二：项目管理
+
+```typescript
+const agent = new Agent({
+  transformContext: async (messages) => {
+    // 获取项目状态
+    const projectState = await getProjectState();
+    
+    const contextMessage: UserMessage = {
+      role: "user",
+      content: [{
+        type: "text",
+        text: `
+Project context:
+- Active tasks: ${projectState.activeTasks.join(", ")}
+- Current sprint: ${projectState.sprint}
+- Blockers: ${projectState.blockers.join(", ") || "None"}
+        `.trim(),
+      }],
+      timestamp: Date.now(),
+    };
+    
+    return [...messages, contextMessage];
+  },
+});
+```
+
+## 消息过滤与转换模式
+
+### 模式一：内容过滤
+
+```typescript
+const agent = new Agent({
+  convertToLlm: (messages) => {
+    return messages.flatMap((m) => {
+      // 过滤敏感信息
+      if (m.role === "user") {
+        const filtered = m.content.map(c => {
+          if (c.type === "text") {
+            return {
+              ...c,
+              text: c.text.replace(/password:\s*\S+/gi, "password: [REDACTED]"),
+            };
+          }
+          return c;
+        });
+        return [{ ...m, content: filtered }];
+      }
+      return [m];
+    });
+  },
+});
+```
+
+### 模式二：格式转换
+
+```typescript
+const agent = new Agent({
+  convertToLlm: (messages) => {
+    return messages.flatMap((m) => {
+      // 将 Markdown 转换为纯文本
+      if (m.role === "user" && m.content[0]?.type === "text") {
+        const plainText = markdownToPlainText(m.content[0].text);
+        return [{
+          ...m,
+          content: [{ type: "text", text: plainText }],
+        }];
+      }
+      return [m];
+    });
+  },
+});
+```
+
+### 模式三：消息合并
+
+```typescript
+const agent = new Agent({
+  convertToLlm: (messages) => {
+    const result: Message[] = [];
+    let currentMerge: Message | null = null;
+    
+    for (const m of messages) {
+      // 合并连续的助手消息
+      if (m.role === "assistant" && currentMerge?.role === "assistant") {
+        currentMerge.content.push(...m.content);
+      } else {
+        if (currentMerge) result.push(currentMerge);
+        currentMerge = m;
+      }
+    }
+    
+    if (currentMerge) result.push(currentMerge);
+    return result;
+  },
+});
+```
+
+## 完整示例：IDE 助手
+
+```typescript
+// ide-agent.ts
+import { Agent } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
+
+// 1. 扩展自定义消息类型
+declare module "@mariozechner/pi-agent-core" {
+  interface CustomAgentMessages {
+    codePreview: {
+      role: "codePreview";
+      language: string;
+      code: string;
+      timestamp: number;
+    };
+    thinking: {
+      role: "thinking";
+      content: string;
+      timestamp: number;
+    };
+  }
+}
+
+// 2. 定义工具
+const readFileTool: AgentTool = {
+  name: "read_file",
+  label: "读取文件",
+  description: "读取文件内容",
+  parameters: Type.Object({ path: Type.String() }),
+  execute: async (id, params) => {
+    const content = await fs.readFile(params.path, "utf-8");
+    return {
+      content: [{ type: "text", text: content }],
+      details: { path: params.path, size: content.length },
+    };
+  },
+};
+
+// 3. 创建 Agent
+const ideAgent = new Agent({
+  initialState: {
+    systemPrompt: "你是一个 IDE 编程助手。",
+    model: getModel("anthropic", "claude-sonnet-4-20250514"),
+    tools: [readFileTool, writeFileTool, listDirectoryTool],
+  },
+  
+  // 4. 上下文转换：注入当前文件
+  transformContext: async (messages) => {
+    const currentFile = await getCurrentFileFromEditor();
+    if (!currentFile) return messages;
+    
+    // 移除旧的上下文消息
+    const withoutOldContext = messages.filter(m =>
+      !(m.role === "user" && m.content[0]?.text?.startsWith("Current file:"))
+    );
+    
+    // 添加新的上下文
+    const contextMessage: UserMessage = {
+      role: "user",
+      content: [{
+        type: "text",
+        text: `Current file: ${currentFile.path}\n\`\`\`${currentFile.language}\n${currentFile.content}\n\`\`\``,
+      }],
+      timestamp: Date.now(),
+    };
+    
+    return [...withoutOldContext, contextMessage];
+  },
+  
+  // 5. 消息转换：过滤自定义消息
+  convertToLlm: (messages) => {
+    return messages.flatMap((m) => {
+      // 过滤 UI 消息
+      if (m.role === "codePreview" || m.role === "thinking") {
+        return [];
+      }
+      // 标准消息透传
+      return [m];
+    });
+  },
+});
+
+// 6. 订阅事件更新 UI
+ideAgent.subscribe((event) => {
+  switch (event.type) {
+    case "message_update":
+      if (event.assistantMessageEvent.type === "text_delta") {
+        updateEditorPreview(event.assistantMessageEvent.delta);
+      }
+      break;
+    case "tool_execution_start":
+      showToolIndicator(event.toolName);
+      break;
+    case "tool_execution_end":
+      hideToolIndicator(event.toolName);
+      break;
+  }
+});
+
+// 7. 添加思考消息（仅 UI 显示）
+function addThinkingMessage(content: string) {
+  ideAgent.appendMessage({
+    role: "thinking",
+    content,
+    timestamp: Date.now(),
+  });
+}
+
+// 8. 添加代码预览（仅 UI 显示）
+function addCodePreview(language: string, code: string) {
+  ideAgent.appendMessage({
+    role: "codePreview",
+    language,
+    code,
+    timestamp: Date.now(),
+  });
+}
+```
+
+## 最佳实践
+
+### ✅ 应该做的
+
+1. **保持 convertToLlm 纯函数**
+   ```typescript
+   // ✅ 正确：无副作用
+   convertToLlm: (messages) => messages.filter(...)
+   
+   // ❌ 错误：有副作用
+   convertToLlm: (messages) => {
+     console.log("Converting...");  // 副作用
+     return messages.filter(...);
+   }
+   ```
+
+2. **处理所有自定义消息类型**
+   ```typescript
+   convertToLlm: (messages) => {
+     return messages.flatMap((m) => {
+       switch (m.role) {
+         case "codePreview": return [];
+         case "thinking": return [...];
+         // 别忘了 default！
+         default: return [m];
+       }
+     });
+   }
+   ```
+
+3. **使用 flatMap 处理过滤**
+   ```typescript
+   // ✅ 正确：flatMap 可以返回空数组过滤
+   return messages.flatMap(m => 
+     shouldInclude(m) ? [m] : []
+   );
+   ```
+
+4. **保留时间戳**
+   ```typescript
+   // 转换时保留原始时间戳
+   return [{
+     role: "assistant",
+     content: [...],
+     timestamp: m.timestamp,  // 保留！
+   }];
+   ```
+
+### ❌ 避免的错误
+
+1. **修改原始消息**
+   ```typescript
+   // ❌ 错误：修改了原始消息
+   convertToLlm: (messages) => {
+     messages[0].content = "modified";  // 不要这样做！
+     return messages;
+   }
+   
+   // ✅ 正确：创建新对象
+   convertToLlm: (messages) => {
+     return messages.map(m => ({
+       ...m,
+       content: "modified",
+     }));
+   }
+   ```
+
+2. **丢失消息**
+   ```typescript
+   // ❌ 错误：未处理未知类型
+   convertToLlm: (messages) => {
+     return messages.filter(m => 
+       m.role === "user" || m.role === "assistant"
+     );
+   }
+   ```
+
+3. **在 transformContext 中做太多事**
+   ```typescript
+   // ❌ 错误：阻塞操作
+   transformContext: async (messages) => {
+     const data = await heavyComputation();  // 太慢！
+     return [...messages, data];
+   }
+   ```
+
 ## 总结
 
-消息转换与上下文管理是 Agent 的核心机制：
+消息转换与上下文管理的核心要点：
 
-1. **convertToLlm** - 将 AgentMessage 转换为 LLM Message
-2. **transformContext** - 添加系统提示、截断上下文
-3. **消息队列** - steeringQueue 和 followUpQueue 分离用户输入和自动消息
-4. **多模态支持** - 处理文本、图片等多种内容类型
-
-这种设计让 Agent 能够灵活地控制与 LLM 的交互，支持各种复杂场景。
+1. **两层转换**：transformContext（可选）+ convertToLlm（必需）
+2. **自定义消息**：通过声明合并扩展 CustomAgentMessages
+3. **上下文修剪**：token 控制、智能摘要、关键消息保留
+4. **动态注入**：编辑器状态、项目信息等实时上下文
+5. **转换模式**：过滤、格式转换、消息合并
 
 ---
 
-**至此，pi-agent 核心篇章完成！** 接下来可以进入 pi-tui、pi-coding-agent 等应用层的教程。
+**下篇预告**: [05-advanced-patterns.md](05-advanced-patterns.md) —— 高级模式与最佳实践，包括状态持久化、多 Agent 协作、错误恢复策略等。

@@ -136,6 +136,739 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions>(
 3. **流转发**：内部 Provider 的事件流被转发到外部流
 4. **错误隔离**：加载失败时发送 error 事件，而不是抛出异常
 
+### 核心概念：什么是"可迭代的流"？
+
+**"可迭代的流"（AsyncIterable Stream）就是一种可以用 `for await...of` 消费的数据流。**
+
+#### 对比：OpenAI SDK vs pi-ai
+
+```typescript
+// 1. OpenAI SDK 原生方式
+const stream = await openai.chat.completions.create({
+  model: "gpt-4",
+  messages: [{ role: "user", content: "Hello" }],
+  stream: true,
+});
+
+// 方式 1: async iterate (推荐)
+for await (const chunk of stream) {
+  console.log(chunk.choices[0]?.delta?.content);
+
+  const delta = chunk.choices[0]?.delta?.content;
+  if (delta) {
+    fullText += delta;  // 需要自己拼接
+  }
+  // 需要自己计算 token、处理错误等
+}
+
+// 方式 2: stream 事件 (Node.js)
+stream.on("data", (chunk) => {
+  console.log(chunk.choices[0]?.delta?.content);
+});
+
+// 2. pi-ai 的 EventStream 是什么？
+// 简单说：EventStream 就是一个包装器，它让任何数据源都能用 for await 消费。
+
+// pi-ai 封装后
+const stream = streamOpenAICompletions(model, context);
+
+for await (const event of stream) {
+  console.log(event);  // 统一的事件格式
+  if (event.type === "text_delta") {
+    console.log(event.delta);  // 文本片段
+    // 自动拼接，event.partial 就是完整消息
+    console.log(event.partial.content[0].text);
+  }
+  if (event.type === "done") {
+    console.log("完成:", event.message);
+    // 自动计算 token 和费用
+    console.log("Token:", event.message.usage);
+    console.log("Cost:", event.message.cost);
+  }
+}
+```
+
+**两者都返回"可迭代的流"，但 pi-ai 做了统一封装。**
+
+两者的关系
+
+```bash
+┌─────────────────────────────────────────────────────────────┐
+│                    OpenAI SDK                               │
+│  create() → Stream<ChatCompletionChunk>                     │
+│            - 直接返回 API 的原始响应 chunk                     │
+│            - 需要自己解析 delta、usage 等                      │
+└─────────────────────────────────────────────────────────────┘
+                            ↓ 封装
+┌─────────────────────────────────────────────────────────────┐
+│                    pi-ai EventStream                        │
+│  stream() → AssistantMessageEventStream                     │
+│            - 统一的事件格式 (text_delta, tool_call, done)     │
+│            - 自动计算 usage、cost                            │
+│            - 支持所有 Provider 的统一接口                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 核心区别对比
+
+| 维度 | OpenAI SDK | pi-ai EventStream |
+|------|-----------|------------------|
+| **返回类型** | `Stream<ChatCompletionChunk>` | `EventStream<AssistantMessageEvent>` |
+| **事件格式** | 原始 API chunk（各家格式不同） | 统一的事件类型（所有 Provider 一致） |
+| **多 Provider 支持** | 仅 OpenAI | 20+ Provider 统一接口 |
+| **错误处理** | `try-catch` 或 `.on("error")` | `event.type === "error"` 统一处理 |
+| **Token 统计** | 需要自己解析 `usage` 字段 | 自动计算，`event.message.usage` |
+| **费用计算** | 需要自己查价格表计算 | 自动计算，`event.message.cost` |
+| **工具调用** | 各 Provider 格式不同 | 统一的 `tool_call` 事件 |
+| **批量创建** | 需要分别调用不同 SDK | `models.map(m => stream(m))` |
+| **延迟加载** | 不支持 | 内置，按需加载 Provider 模块 |
+
+
+#### EventStream 的本质
+
+```typescript
+// EventStream 实现了 AsyncIterable 接口
+export class EventStream<T> implements AsyncIterable<T> {
+  private queue: T[] = [];
+  private waiting: ((value: IteratorResult<T>) => void)[] = [];
+
+  // 生产者调用 push() 放入事件
+  push(event: T): void {
+    const waiter = this.waiting.shift();
+    if (waiter) {
+      waiter({ value: event, done: false });  // 唤醒等待的消费者
+    } else {
+      this.queue.push(event);  // 存入队列
+    }
+  }
+
+  // 消费者用 for await 消费
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (true) {
+      if (this.queue.length > 0) {
+        yield this.queue.shift()!;  // 从队列取
+      } else {
+        // 没事件时等待 push() 唤醒
+        const result = await new Promise((resolve) =>
+          this.waiting.push(resolve)
+        );
+        if (result.done) return;
+        yield result.value;
+      }
+    }
+  }
+}
+```
+
+**通俗理解：**
+- `EventStream` 就像一个**有缓冲的管道**
+- 生产者调用 `push()` 往管道里放数据
+- 消费者用 `for await` 从管道里取数据
+- 如果管道空了，消费者会等待，直到有新数据
+
+#### 三层流式结构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  调用层：for await (event of stream) { }                    │
+│  - 消费者：用 for await 消费事件                             │
+└─────────────────────────────────────────────────────────────┘
+                            ↓ 消费的是 outer
+┌─────────────────────────────────────────────────────────────┐
+│  代理层：outer = new AssistantMessageEventStream()          │
+│  - 空壳管道：内部有 queue 和 waiting                         │
+│  - 不产生数据，只负责转发                                   │
+└─────────────────────────────────────────────────────────────┘
+                            ↓ forwardStream 转发
+┌─────────────────────────────────────────────────────────────┐
+│  实现层：inner = module.stream()                            │
+│  - 实际生产者：调用 OpenAI / Anthropic / Google API          │
+│  - 产生事件：text_delta, tool_call, done                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 为什么需要 `outer` 这个空壳？
+
+这是理解 pi-ai 流式架构的关键。我们用三个问题来拆解：
+
+#### 问题 1：为什么需要 `outer` 这个空壳？
+
+**答案：因为模块加载是异步的，但调用者需要立即获得可迭代的流。**
+
+```typescript
+// 如果没有 outer，代码会是这样（同步返回不可能）：
+return (model, context, options) => {
+  const module = await loadModule(); // ❌ 这里不能 await，调用者不想要 Promise
+  return module.stream(model, context, options);
+}
+
+// 有了 outer，调用者拿到的是：
+return (model, context, options) => {
+  const outer = new AssistantMessageEventStream(); // 立即创建
+  loadModule().then(...); // 后台加载
+  return outer; // ✅ 立即返回一个可迭代的流
+}
+```
+
+#### 问题 2：`outer` 和 `inner` 是怎么串起来的？
+
+**答案：通过 `forwardStream` 函数，把 `inner` 的每个事件推送到 `outer`。**
+
+```typescript
+// packages/ai/src/providers/register-builtins.ts
+
+function forwardStream(
+  target: AssistantMessageEventStream,
+  source: AsyncIterable<AssistantMessageEvent>,
+): void {
+  (async () => {
+    for await (const event of source) {
+      target.push(event);  // 🔑 关键：把 inner 的事件推送到 outer
+    }
+    target.end();  // inner 结束时，关闭 outer
+  })();
+}
+```
+
+#### 问题 3：调用者是怎么收到事件的？
+
+**答案：`outer` 内部维护了一个队列和等待者列表，调用者迭代时自动消费事件。**
+
+```typescript
+// packages/ai/src/utils/event-stream.ts
+
+export class EventStream<T, R = T> implements AsyncIterable<T> {
+  private queue: T[] = [];
+  private waiting: ((value: IteratorResult<T>) => void)[] = [];
+
+  push(event: T): void {
+    // 如果有等待的消费者，直接唤醒
+    const waiter = this.waiting.shift();
+    if (waiter) {
+      waiter({ value: event, done: false });
+    } else {
+      // 否则存入队列
+      this.queue.push(event);
+    }
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (true) {
+      if (this.queue.length > 0) {
+        yield this.queue.shift()!;  // 消费队列
+      } else if (this.done) {
+        return;
+      } else {
+        // 没有事件时，把自己加入等待列表
+        const result = await new Promise<IteratorResult<T>>(
+          (resolve) => this.waiting.push(resolve)
+        );
+        if (result.done) return;
+        yield result.value;
+      }
+    }
+  }
+}
+```
+
+### 完整流程时序图
+
+```
+┌──────────────┐      ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+│   调用者     │      │  outer 流   │      │  inner 流   │      │  Provider   │
+│              │      │ (空壳)      │      │ (实际)      │      │  模块       │
+└──────┬───────┘      └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
+       │                     │                     │                     │
+       │ stream(model)       │                     │                     │
+       ├────────────────────>│                     │                     │
+       │                     │                     │                     │
+       │                     │ loadModule()        │                     │
+       │                     ├────────────────────>│                     │
+       │                     │                     │                     │
+       │                     │                     │                     │
+       │ outer (立即返回)    │                     │                     │
+       │<────────────────────┤                     │                     │
+       │                     │                     │                     │
+       │ for await (event)   │                     │                     │
+       ├────────────────────>│                     │                     │
+       │                     │ [等待事件]          │                     │
+       │                     │                     │                     │
+       │                     │   module.loaded     │                     │
+       │                     │<────────────────────┤                     │
+       │                     │                     │                     │
+       │                     │ inner = stream()    │                     │
+       │                     ├────────────────────>│                     │
+       │                     │                     │                     │
+       │                     │ forwardStream 启动  │                     │
+       │                     │                     │                     │
+       │                     │                     │ text_delta: "Hello" │
+       │                     │<────────────────────┤                     │
+       │                     │                     │                     │
+       │ event: text_delta   │                     │                     │
+       │<────────────────────┤                     │                     │
+       │                     │                     │                     │
+       │ for await (event)   │                     │                     │
+       ├────────────────────>│                     │                     │
+       │                     │ [继续监听]          │                     │
+       │                     │                     │                     │
+       │                     │ text_delta: " World"|                     │
+       │                     │<────────────────────┤                     │
+       │                     │                     │                     │
+       │ event: text_delta   │                     │                     │
+       │<────────────────────┤                     │                     │
+       │                     │                     │                     │
+       │                     │                     │ done: "complete"    │
+       │                     │<────────────────────┤                     │
+       │                     │                     │                     │
+       │ event: done         │                     │                     │
+       │<────────────────────┤                     │                     │
+       │                     │                     │                     │
+```
+
+### 深入：inner 和 outer 的关系与流转
+
+这是理解延迟加载的核心。我们用**水管 analogy**来解释：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        调用者                                    │
+│  const stream = streamOpenAICompletions(model, context);        │
+│  for await (const event of stream) { ... }                      │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ 拿到的是 outer
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  outer = new AssistantMessageEventStream()                      │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │  "空管道" - 刚创建时里面没有数据                            │ │
+│  │                                                           │ │
+│  │  - queue: []        ← 事件队列（后备缓冲）                 │ │
+│  │  - waiting: [...]   ← 等待的消费者（调用者在等）           │ │
+│  │  - done: false      ← 还没结束                            │ │
+│  │                                                           │ │
+│  │  职责：只负责转发，不生产数据                             │ │
+│  └───────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ forwardStream 连接
+                              │ for await (event of inner) { outer.push(event) }
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  inner = module.stream()                                        │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │  事件载体 - AssistantMessageEventStream 实例               │ │
+│  │                                                           │ │
+│  │  Provider 函数内部（真正的生产者）：                       │ │
+│  │  ┌─────────────────────────────────────────────────────┐ │ │
+│  │  │ (async () => {                                      │ │ │
+│  │  │   // 1. 调用真实 API                                  │ │ │
+│  │  │   const response = await openai.chat...create()     │ │ │
+│  │  │   // 2. 解析并推送事件到 inner                         │ │ │
+│  │  │   for await (const chunk of response) {             │ │ │
+│  │  │     inner.push({ type: "text_delta", ... })         │ │ │
+│  │  │   }                                                 │ │ │
+│  │  │   // 3. 结束 inner                                   │ │ │
+│  │  │   inner.end()                                       │ │ │
+│  │  │ })()                                                │ │ │
+│  │  └─────────────────────────────────────────────────────┘ │ │
+│  │                                                           │ │
+│  │  inner 职责：作为事件载体，被 Provider 的 IIFE 填充事件      │ │
+│  └───────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### inner 和 outer 的职责分工
+
+| 角色 | 创建时机 | 职责 | 数据从哪来 |
+|------|---------|------|-----------|
+| **outer** | 立即创建 | 转发事件给调用者 | 从 inner 通过 `push()` 接收 |
+| **inner** | 模块加载后创建 | 作为事件载体，被 Provider 的 IIFE 填充 | Provider 的 IIFE 调用 `inner.push()` 从 API 获取数据 |
+
+**关键澄清**：
+- `inner` 本身不是"生产者"，它是一个 `AssistantMessageEventStream` 实例
+- 真正的"生产者"是 Provider 函数内部的 IIFE（立即执行函数）
+- IIFE 调用真实 API，解析响应，然后调用 `inner.push(event)` 填充事件
+
+### 数据流转细节：queue 和 waiting 是如何工作的？
+
+`outer.push(event)` 并不是简单地"推到 queue 中"，而是有两种情况：
+
+```typescript
+// EventStream.push() 的完整逻辑
+push(event: T): void {
+  if (this.done) return;
+
+  // 1. 先看看有没有等待的消费者
+  const waiter = this.waiting.shift();
+
+  if (waiter) {
+    // 情况 A：有等待的消费者 → 直接唤醒，不经过 queue
+    // 就像"快递直接送到门口"
+    waiter({ value: event, done: false });
+  } else {
+    // 情况 B：消费者还没准备好 → 存入 queue
+    // 就像"快递放到快递柜"
+    this.queue.push(event);
+  }
+}
+```
+
+**两种消费场景：**
+
+```typescript
+// 场景 1：消费者已经在等待（理想情况）
+for await (const event of outer) {  // ← 早就等在这里了
+  console.log(event);
+}
+// 结果：inner.push(event) → 直接唤醒 for await → 不经过 queue
+
+// 场景 2：inner 生产太快，queue 会暂存
+const stream = streamOpenAICompletions(model, context);
+// ... 做些别的事 ...
+for await (const event of stream) {  // ← 过了一会才开始消费
+  console.log(event);
+}
+// 结果：事件先存 queue → for await 开始时从 queue 取
+```
+
+**为什么这样设计？**
+
+- **有消费者在等** → 直接送达，减少一次队列拷贝，性能更好
+- **没消费者在等** → 先存 queue，等消费者来取，不会丢数据
+
+### 完整的数据流转过程
+
+```typescript
+// 第 1 步：调用者调用
+const stream = streamOpenAICompletions(model, context);
+// → 创建 outer（立即返回）（此时 outer 是空的）
+// const outer = new AssistantMessageEventStream();
+// → 返回给调用者
+
+// 第 2 步：调用者开始消费
+for await (const event of stream) {  // ← 开始迭代 outer
+  console.log(event);
+}
+// → outer 进入等待状态：「有消费者在等数据了」
+
+// 第 3 步：后台加载模块
+loadModule().then((module) => {
+  // 第 4 步：创建 inner（作为事件载体）
+  const inner = module.stream(model, context, options);
+  // inner 是一个 AssistantMessageEventStream 实例
+
+  // 第 5 步：启动转发器
+  forwardStream(outer, inner);
+  // 等价于:
+  // (async () => {
+  //   for await (const event of inner) {
+  //     outer.push(event);  // ← 把 inner 的事件推到 outer
+  //   }
+  //   outer.end();  // inner 结束，关闭 outer
+  // })();
+});
+
+// 第 6 步：Provider 的 IIFE 开始执行（真正的生产逻辑）
+// streamOpenAICompletions 内部:
+// (async () => {
+//   const response = await openai.chat.completions.create({...})
+//   for await (const chunk of response) {
+//     inner.push({ type: "text_delta", delta: chunk.choices[0]?.delta?.content })
+//   }
+//   inner.end();
+// })();
+
+// 第 7 步：inner 收到事件，转发给调用者
+// inner 收到：{ type: "text_delta", delta: "Hello" }
+// → 调用 outer.push(event)
+// → 唤醒 waiting 中的调用者
+// → 调用者收到：{ type: "text_delta", delta: "Hello" }
+```
+
+### 为什么要绕这一层？
+
+**直接返回 inner 不行吗？**
+
+```typescript
+// ❌ 不行！因为模块加载是异步的
+return (model, context, options) => {
+  const module = await loadModule();  // ← 这里要 await
+  return module.stream(model, context, options);
+}
+// 问题：返回值变成了 Promise<EventStream>，调用者必须 await
+
+// ✅ 所以要先返回 outer
+return (model, context, options) => {
+  const outer = new EventStream();  // ← 立即返回
+  loadModule().then(module => {
+    const inner = module.stream(...);
+    forwardStream(outer, inner);  // ← 后台转发
+  });
+  return outer;  // ← 调用者可以立即 for await
+}
+```
+
+### 比喻理解
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   调用者     │     │   outer     │     │   inner     │
+│  (喝水的人)  │     │  (水龙头)    │     │ (输水管道)  │
+└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+       │                   │                   │
+       │ 打开水龙头          │                   │
+       ├──────────────────>│                   │
+       │                   │                   │
+       │ 立即出水            │                   │
+       │ (其实水是后面来的)   │  连接水管         │
+       │<──────────────────┤<──────────────────┤
+       │                   │                   │ 水泵注水
+       │ 持续水流           │  推送水            │ (Provider IIFE)
+       │<──────────────────┤<──────────────────┤
+```
+
+**outer 就像你家的水龙头**：
+- outer 是水龙头，一打开就有水（立即返回 EventStream）
+- 其实水是自来水厂OpenAI SDK 原始流送的（水泵 Provider 的 IIFE 从 API 获取数据）
+- 中间有水管连接（forwardStream 转发）
+- inner 只是输水管道，真正抽水的是 Provider IIFE 这个"水泵"
+
+### 完整的四层管道架构（整合视图）
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 第 1 层：调用层                                                   │
+│                                                                 │
+│  const stream = streamOpenAICompletions(model, context);        │
+│  for await (const event of stream) {                            │
+│    console.log(event);  // ← 消费的是 outer 流                  │
+│  }                                                              │
+│                                                                 │
+│  ↑ 调用者拿到的是 outer，立即可以开始 for await                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ 返回的是 outer (立即返回)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第 2 层：代理层 (outer) - 空壳管道                                 │
+│                                                                 │
+│  new AssistantMessageEventStream()                              │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ 内部结构：                                                 │ │
+│  │  - queue: []        ← 事件队列（后备缓冲）                  │ │
+│  │  - waiting: [...]   ← 等待的消费者回调                     │ │
+│  │  - done: false      ← 是否结束                             │ │
+│  │                                                           │ │
+│  │ 推送策略：                                                 │ │
+│  │  - 有 waiting → 直接唤醒，不经过 queue                      │ │
+│  │  - 无 waiting → 存入 queue，等消费者来取                   │ │
+│  │                                                           │ │
+│  │ 接收：push(event) ← forwardStream 调用这里                 │ │
+│  │ 结束：end()                                                │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  ↑ 职责：解耦调用者和 inner，提供统一的消费接口                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ forwardStream 转发
+                              │ for await (event of inner) { outer.push(event) }
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第 3 层：实现层 (inner) - 事件载体                                 │
+│                                                                 │
+│  module.stream(model, context, options)                        │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │ AssistantMessageEventStream 实例                           │ │
+│  │                                                           │ │
+│  │ Provider 函数内部（真正的生产者）：                        │ │
+│  │ (async () => {                                            │ │
+│  │   // 1. 调用 OpenAI API 原生流                              │ │
+│  │   const response = await openai.chat.completions.create() │ │
+│  │   // 2. 解析流式响应，推送到 inner                          │ │
+│  │   for await (const chunk of response) {                   │ │
+│  │     inner.push({ type: "text_delta", delta: ... })        │ │
+│  │   }                                                       │ │
+│  │   // 3. 自动计算 usage、cost                                │ │
+│  │   inner.end()                                             │ │
+│  │ })()                                                      │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│                                                                 │
+│  ↑ 职责：作为事件载体，被 Provider 的 IIFE 填充标准化事件          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              │ 动态导入 (延迟加载)
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ 第 4 层：Provider 模块 - 按需加载                                   │
+│                                                                 │
+│  import("./openai-completions.js")                              │
+│  ┌───────────────────────────────────────────────────────────┐ │
+│  │  - 按需加载：只加载实际使用的 Provider                       │ │
+│  │  - Promise 缓存：确保只加载一次                             │ │
+│  │  - 错误隔离：单个 Provider 失败不影响其他                    │ │
+│  │                                                           │ │
+│  │ 20+ Provider:                                              │ │
+│  │  - openai-completions.js                                  │ │
+│  │  - anthropic.js                                           │ │
+│  │  - google.js                                              │ │
+│  │  - ...                                                    │ │
+│  └───────────────────────────────────────────────────────────┘ │
+│  ↑ 职责：提供 stream 函数，内部调用真实 API                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 为什么需要四层？每层的价值是什么？
+
+| 层级 | 名称 | 职责 | 为什么需要？ |
+|------|------|------|-------------|
+| **第 1 层** | 原始 SDK 流 | OpenAI / Anthropic 原生 API | 无法绕过，必须依赖官方 SDK |
+| **第 2 层** | inner | 事件载体（AssistantMessageEventStream） | Provider 函数向其推送标准化事件 |
+| **第 3 层** | outer | 延迟加载代理 | 模块加载是异步的，但要同步返回流 |
+| **第 4 层** | Provider 模块 | 调用 API 并填充 inner | 封装各 Provider 差异，提供统一接口 |
+
+### 完整数据流示例
+
+```typescript
+// 用户代码
+const stream = streamOpenAICompletions(model, context);
+
+for await (const event of stream) {
+  console.log(event);
+}
+
+// 背后发生的事：
+
+// 第 1 步：创建 outer（立即返回）
+// → outer = new AssistantMessageEventStream()
+// → 返回给调用者
+
+// 第 2 步：后台加载模块
+// → loadModule().then(module => { ... })
+
+// 第 3 步：创建 inner
+// → inner = module.stream(model, context, options)
+
+// 第 4 步：启动转发器
+// → forwardStream(outer, inner)
+// → (async () => {
+//      for await (const event of inner) {
+//        outer.push(event);  // ← 把 inner 的事件推到 outer
+//      }
+//      outer.end();
+//    })();
+
+// 第 5 步：Provider 的 IIFE 调用 OpenAI SDK
+// → (async () => {
+//     const response = await openai.chat.completions.create({...})
+//     for await (const chunk of response) {
+//       inner.push({ type: "text_delta", delta: chunk.choices[0]?.delta?.content })
+//     }
+//     inner.end();
+//   })();
+
+// 第 6 步：outer 收到事件，转发给调用者
+// → outer.push(event)
+// → 如果调用者在 waiting，直接唤醒
+// → 否则存入 queue
+
+// 第 7 步：调用者收到统一格式的事件
+// → { type: "text_delta", delta: "Hello", partial: {...}, ... }
+```
+
+### 设计优势
+
+| 设计点 | 解决的问题 | 实现方式 |
+|--------|-----------|---------|
+| **同步返回流** | 调用者不想 `await` 模块加载 | 返回空的 `outer` 流 |
+| **异步转发** | 模块加载完成后需要通知调用者 | `forwardStream` 事件转发 |
+| **生产者 - 消费者解耦** | Provider 不知道谁会消费事件 | `EventStream` 内部队列缓冲 |
+| **错误不抛出** | 流式场景不适合 try-catch | 发送 `error` 事件 |
+| **Promise 缓存** | 避免重复加载同一模块 | `promise ||= import(...)` |
+
+### 进阶：为什么不让调用者 `await`？
+
+你可能会想：**如果调用者能接受 Promise，能不能直接这样写？**
+
+```typescript
+// 看似可行的方案
+return async (model, context, options) => {
+  const module = await loadModule();
+  return module.stream(model, context, options);
+};
+```
+
+**这会破坏整个 API 设计契约。** 原因如下：
+
+#### 1. 返回类型不一致
+
+```typescript
+// 当前设计
+export type StreamFunction = (model, context, options) => EventStream;
+
+// 如果改成 async
+export type StreamFunction = (model, context, options) => Promise<EventStream>;
+//                         ^^^^^^ 整个类型系统需要改动
+```
+
+#### 2. 批量创建流时的问题
+
+```typescript
+// 场景：并行调用多个模型
+
+// ✅ 当前设计：同步创建所有流，然后并行消费
+const models = [openAIModel, anthropicModel, googleModel];
+const streams = models.map(m => stream(m, context));  // 立即创建 3 个流
+const results = await Promise.all(streams.map(s => s.result()));
+
+// ❌ Promise 设计：必须串行等待
+const streams = [];
+for (const m of models) {
+  const s = await stream(m, context);  // ← 必须等待模块加载完成
+  streams.push(s);
+}
+// 结果：第 2 个流要等第 1 个流的模块加载完才能开始
+```
+
+#### 3. Producer-Consumer vs Request-Response
+
+```
+Request-Response 模式：
+  const response = await fetch('/api');  // 等全部完成再返回
+  console.log(response);
+
+Producer-Consumer 模式（pi-ai）：
+  const stream = streamOpenAICompletions();  // 立即返回通道
+  for await (const event of stream) {       // 边产生边消费
+    console.log(event);
+  }
+```
+
+**流式 API 的核心价值是"边产生边消费"，调用者应该立即获得流通道，而不是等待加载完成。**
+
+#### 4. 错误处理统一性
+
+```typescript
+// 当前设计：所有错误通过 error 事件处理
+for await (const event of stream) {
+  if (event.type === 'error') {
+    console.error('流式错误:', event.error);
+  }
+}
+
+// Promise 设计：需要两套错误处理
+try {
+  const stream = await streamOpenAICompletions();  // ← Promise 错误
+  for await (const event of stream) {              // ← 流式错误
+    if (event.type === 'error') {
+      console.error('流式错误:', event.error);
+    }
+  }
+} catch (e) {
+  console.error('加载错误:', e);
+}
+```
+
 ### 模块加载与缓存
 
 ```typescript

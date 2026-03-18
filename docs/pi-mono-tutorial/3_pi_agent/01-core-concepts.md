@@ -1,488 +1,481 @@
-# 7. Agent 核心概念：状态、消息、事件流
+# Agent 核心概念：状态、消息、事件流
 
-问下大家，你有没有想过，一个 AI Agent 是怎么工作的？
+> **难度：入门** | **预计阅读时间：20 分钟**
 
-OpenClaw 刚开始以为 Agent 就是调用一下 LLM API，拿到回复就完事了。但深入了解后发现，一个真正的 Agent 要复杂得多：
-- 它需要**记住**之前的对话
-- 它需要**调用工具**来完成任务
-- 它需要**管理状态**（空闲、运行中、等待输入等）
-- 它需要**处理事件流**（开始、文本增量、工具调用、结束等）
+想象一下，你正在构建一个 AI 编码助手。用户输入代码问题，AI 需要：
+1. 理解上下文（之前的对话）
+2. 可能调用工具（读取文件、执行命令）
+3. 流式返回结果
+4. 处理用户的实时干预（"停！换个思路"）
 
-pi-agent 就是 pi-mono 框架中负责这些核心功能的运行时。今天我们就来深入理解它的设计。
+这个过程中，状态如何管理？消息如何流转？工具如何执行？
 
-## Agent 与 LLM 的区别
+pi-agent 就是为解决这些问题而生的。
 
-很多人容易混淆 Agent 和 LLM 的概念：
+## 什么是 Agent？
 
-| 特性 | LLM | Agent |
-|-----|-----|-------|
-| 本质 | 语言模型 | 运行时框架 |
-| 状态 | 无状态 | 有状态 |
-| 工具 | 不能直接调用 | 可以调用工具 |
-| 记忆 | 通过上下文 | 通过消息队列 |
-| 事件 | 一次性响应 | 流式事件 |
+Agent 是一个**有状态的对话管理器**，它在用户和 LLM 之间架起桥梁：
 
-**简单理解：**
-- LLM 是"大脑" - 负责理解和生成语言
-- Agent 是"身体" - 负责管理状态、调用工具、处理事件流
-
-## pi-agent 架构概览
-
-```mermaid
-graph TB
-    subgraph "Agent 运行时"
-        subgraph "AgentState"
-            IDLE[idle<br/>空闲]
-            RUN[running<br/>运行中]
-            WAIT[waitingForUserInput<br/>等待用户输入]
-            ERR[error<br/>错误]
-        end
-        
-        subgraph "AgentMessage"
-            USER[user<br/>用户消息]
-            ASSIST[assistant<br/>助手消息]
-            TOOL[tool_result<br/>工具结果]
-        end
-        
-        subgraph "AgentMessageEvent"
-            START[agent_start/agent_end]
-            TURN[turn_start/turn_end]
-            MSG[message_start/update/end]
-            TEXE[tool_execution_start/end]
-        end
-        
-        subgraph "AgentLoop"
-            LOOP[驱动整个 Agent<br/>执行流程]
-        end
-    end
-    
-    IDLE --> RUN
-    RUN --> WAIT
-    RUN --> IDLE
-    WAIT --> RUN
-    RUN --> ERR
-    
-    USER --> LOOP
-    ASSIST --> LOOP
-    TOOL --> LOOP
-    
-    LOOP --> START
-    LOOP --> TURN
-    LOOP --> MSG
-    LOOP --> TEXE
+```
+┌─────────────┐     ┌─────────────────────────────────────┐     ┌─────────┐
+│    用户      │────→│              Agent                   │────→│   LLM   │
+│  (输入问题)  │     │  ┌─────────┐  ┌─────────┐  ┌───────┐ │     │         │
+└─────────────┘     │  │ 状态管理 │  │ 消息转换 │  │ 工具执行│ │     └─────────┘
+       ↑            │  └─────────┘  └─────────┘  └───────┘ │          │
+       │            │  ┌─────────┐  ┌─────────┐            │          │
+       └────────────│──│ 事件流   │  │ 干预机制 │            │←─────────┘
+        (接收回复)   │  └─────────┘  └─────────┘            │   (流式响应)
+                    └─────────────────────────────────────┘
 ```
 
-## 1. AgentState - 状态管理
+与直接使用 pi-ai 的 `streamSimple` 不同，Agent 提供了：
 
-### 状态定义
+| 特性 | pi-ai (底层) | pi-agent (高层) |
+|------|-------------|----------------|
+| **状态管理** | 无状态，每次调用独立 | 维护完整对话状态 |
+| **工具执行** | 返回 tool_call，自行处理 | 自动执行，支持并行/串行 |
+| **消息转换** | 手动处理 | 自动转换 + 支持自定义消息类型 |
+| **实时干预** | 不支持 | Steering/Follow-up 机制 |
+| **事件粒度** | 消息级别 | 细粒度（message_start/update/end） |
+
+## 核心概念一：AgentMessage
+
+Agent 使用 `AgentMessage` 作为消息抽象，它比底层的 `Message` 更灵活：
 
 ```typescript
 // packages/agent/src/types.ts
 
-export type AgentState =
-  | "idle"           // 空闲，等待用户输入
-  | "running"        // 运行中，正在与 LLM 交互
-  | "waitingForUserInput"  // 等待用户输入（如确认）
-  | "error";         // 发生错误
+// AgentMessage = 标准 LLM 消息 + 自定义消息类型
+export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
+
+// 标准 LLM 消息（来自 pi-ai）
+type Message = UserMessage | AssistantMessage | ToolResultMessage;
+
+// 自定义消息类型（通过声明合并扩展）
+export interface CustomAgentMessages {
+  // 默认空，应用可以扩展
+}
 ```
 
-### 状态流转
+### 为什么需要 AgentMessage？
 
-```mermaid
-stateDiagram-v2
-    [*] --> idle
-    idle --> running : 用户输入
-    running --> idle : 完成
-    running --> waitingForUserInput : 需要用户确认
-    waitingForUserInput --> running : 用户输入
-    running --> error : 发生错误
-    error --> [*]
-```
-
-### 状态管理实现
+假设你在构建一个 IDE 插件，需要显示：
+- 用户输入
+- AI 回复
+- **代码片段预览**（仅 UI 显示，不发送给 LLM）
+- **系统通知**（仅 UI 显示）
 
 ```typescript
-// packages/agent/src/agent.ts
-
-export class Agent {
-  private state: AgentState = "idle";
-  private stateListeners: Set<(state: AgentState) => void> = new Set();
-  
-  /** 获取当前状态 */
-  getState(): AgentState {
-    return this.state;
+// 扩展自定义消息类型
+declare module "@mariozechner/pi-agent-core" {
+  interface CustomAgentMessages {
+    // 代码预览消息（仅 UI 使用）
+    codePreview: {
+      role: "codePreview";
+      language: string;
+      code: string;
+      timestamp: number;
+    };
+    
+    // 系统通知（仅 UI 使用）
+    notification: {
+      role: "notification";
+      text: string;
+      level: "info" | "warning" | "error";
+      timestamp: number;
+    };
   }
-  
-  /** 设置状态 */
-  private setState(newState: AgentState): void {
-    if (this.state !== newState) {
-      this.state = newState;
-      // 通知所有监听器
-      this.stateListeners.forEach(listener => listener(newState));
+}
+
+// 现在可以安全使用
+const previewMsg: AgentMessage = {
+  role: "codePreview",
+  language: "typescript",
+  code: "const x = 1;",
+  timestamp: Date.now(),
+};
+```
+
+### 消息转换流程
+
+自定义消息不会直接发送给 LLM，需要经过 `convertToLlm` 转换：
+
+```
+AgentMessage[] → transformContext() → AgentMessage[] → convertToLlm() → Message[] → LLM
+                    (可选：修剪上下文)              (必需：过滤+转换)
+```
+
+```typescript
+const agent = new Agent({
+  convertToLlm: (messages) => messages.flatMap(m => {
+    // 过滤掉 UI 专用消息
+    if (m.role === "codePreview" || m.role === "notification") {
+      return [];
     }
-  }
-  
-  /** 订阅状态变化 */
-  onStateChange(listener: (state: AgentState) => void): () => void {
-    this.stateListeners.add(listener);
-    return () => this.stateListeners.delete(listener);
-  }
-}
-```
-
-## 2. AgentMessage - 消息系统
-
-### 消息类型
-
-```typescript
-// packages/agent/src/types.ts
-
-export type AgentMessage =
-  | UserAgentMessage
-  | AssistantAgentMessage
-  | ToolResultAgentMessage;
-
-// 用户消息
-export interface UserAgentMessage {
-  type: "user";
-  id: string;
-  content: string;
-  timestamp: number;
-}
-
-// 助手消息
-export interface AssistantAgentMessage {
-  type: "assistant";
-  id: string;
-  content: string;
-  toolCalls?: ToolCall[];  // 包含的工具调用
-  timestamp: number;
-}
-
-// 工具结果消息
-export interface ToolResultAgentMessage {
-  type: "tool_result";
-  id: string;
-  toolCallId: string;  // 对应的 ToolCall ID
-  content: string;
-  isError: boolean;
-  timestamp: number;
-}
-```
-
-### 消息队列
-
-Agent 维护两个消息队列：
-
-```typescript
-export class Agent {
-  // 引导消息队列 - 用于控制 Agent 行为
-  private steeringQueue: AgentMessage[] = [];
-  
-  // 跟进消息队列 - 用于补充上下文
-  private followUpQueue: AgentMessage[] = [];
-  
-  // 历史消息
-  private history: AgentMessage[] = [];
-  
-  /** 添加引导消息 */
-  addSteeringMessage(message: AgentMessage): void {
-    this.steeringQueue.push(message);
-  }
-  
-  /** 添加跟进消息 */
-  addFollowUpMessage(message: AgentMessage): void {
-    this.followUpQueue.push(message);
-  }
-  
-  /** 获取所有待处理消息 */
-  getPendingMessages(): AgentMessage[] {
-    return [...this.steeringQueue, ...this.followUpQueue];
-  }
-  
-  /** 清空队列 */
-  clearQueues(): void {
-    this.steeringQueue = [];
-    this.followUpQueue = [];
-  }
-}
-```
-
-**设计要点：**
-- **steeringQueue** - 高优先级消息，用于引导 Agent 行为（如系统提示）
-- **followUpQueue** - 普通消息，用于补充上下文
-- **history** - 完整的历史记录
-
-## 3. AgentMessageEvent - 事件系统
-
-### 事件类型
-
-```typescript
-// packages/agent/src/types.ts
-
-export type AgentMessageEvent =
-  // Agent 生命周期
-  | AgentStartEvent
-  | AgentEndEvent
-  
-  // Turn（一轮对话）生命周期
-  | TurnStartEvent
-  | TurnEndEvent
-  
-  // 消息生命周期
-  | MessageStartEvent
-  | MessageUpdateEvent
-  | MessageEndEvent
-  
-  // 工具执行
-  | ToolExecutionStartEvent
-  | ToolExecutionEndEvent
-  
-  // 流式内容
-  | ContentDeltaEvent;
-
-// Agent 开始
-export interface AgentStartEvent {
-  type: "agent_start";
-  agentId: string;
-}
-
-// Agent 结束
-export interface AgentEndEvent {
-  type: "agent_end";
-  agentId: string;
-  reason: "completed" | "error" | "aborted";
-}
-
-// Turn 开始
-export interface TurnStartEvent {
-  type: "turn_start";
-  turnId: string;
-}
-
-// Turn 结束
-export interface TurnEndEvent {
-  type: "turn_end";
-  turnId: string;
-}
-
-// 消息开始
-export interface MessageStartEvent {
-  type: "message_start";
-  messageId: string;
-  role: "assistant";
-}
-
-// 消息更新（流式）
-export interface MessageUpdateEvent {
-  type: "message_update";
-  messageId: string;
-  content: string;  // 当前完整内容
-  delta: string;    // 新增的片段
-}
-
-// 消息结束
-export interface MessageEndEvent {
-  type: "message_end";
-  messageId: string;
-  finalContent: string;
-}
-
-// 工具执行开始
-export interface ToolExecutionStartEvent {
-  type: "tool_execution_start";
-  toolCallId: string;
-  toolName: string;
-  arguments: Record<string, unknown>;
-}
-
-// 工具执行结束
-export interface ToolExecutionEndEvent {
-  type: "tool_execution_end";
-  toolCallId: string;
-  result: string;
-  isError: boolean;
-  duration: number;  // 执行耗时（毫秒）
-}
-```
-
-### 事件流示例
-
-一次完整的对话会产生这样的事件流：
-
-```
-agent_start
-  └── turn_start
-        ├── message_start (assistant)
-        ├── message_update ("Hello")
-        ├── message_update ("Hello, how")
-        ├── message_update ("Hello, how can")
-        ├── message_update ("Hello, how can I")
-        ├── message_update ("Hello, how can I help")
-        └── message_end
-  └── turn_end
-agent_end (completed)
-```
-
-包含工具调用的对话：
-
-```
-agent_start
-  └── turn_start
-        ├── message_start
-        ├── message_update ("I'll")
-        ├── message_update ("I'll check")
-        ├── message_update ("I'll check the")
-        ├── message_update ("I'll check the weather")
-        ├── tool_execution_start (get_weather, {city: "Beijing"})
-        ├── tool_execution_end (result: "Sunny, 25°C", duration: 500ms)
-        ├── message_update ("The weather")
-        ├── message_update ("The weather in Beijing")
-        ├── message_update ("The weather in Beijing is sunny")
-        └── message_end
-  └── turn_end
-agent_end (completed)
-```
-
-## 4. Tool - 工具系统
-
-### 工具定义
-
-```typescript
-// packages/agent/src/types.ts
-
-export interface Tool {
-  name: string;
-  description: string;
-  parameters: ToolParameters;
-  execute: (args: Record<string, unknown>) => Promise<string>;
-}
-
-export interface ToolParameters {
-  type: "object";
-  properties: Record<string, ToolParameterProperty>;
-  required?: string[];
-}
-
-export interface ToolParameterProperty {
-  type: "string" | "number" | "boolean" | "array" | "object";
-  description?: string;
-  enum?: string[];
-}
-```
-
-### 工具调用
-
-```typescript
-export interface ToolCall {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
-```
-
-### 工具注册
-
-```typescript
-export class Agent {
-  private tools: Map<string, Tool> = new Map();
-  
-  /** 注册工具 */
-  registerTool(tool: Tool): void {
-    this.tools.set(tool.name, tool);
-  }
-  
-  /** 获取工具 */
-  getTool(name: string): Tool | undefined {
-    return this.tools.get(name);
-  }
-  
-  /** 获取所有工具 */
-  getAllTools(): Tool[] {
-    return Array.from(this.tools.values());
-  }
-  
-  /** 执行工具 */
-  async executeTool(toolCall: ToolCall): Promise<string> {
-    const tool = this.getTool(toolCall.name);
-    if (!tool) {
-      throw new Error(`Unknown tool: ${toolCall.name}`);
+    // 转换自定义消息为标准消息
+    if (m.role === "custom") {
+      return [{ role: "user", content: m.content, timestamp: m.timestamp }];
     }
-    return await tool.execute(toolCall.arguments);
-  }
+    // 标准消息直接透传
+    return [m];
+  }),
+});
+```
+
+## 核心概念二：AgentState
+
+Agent 维护完整的状态，你可以随时访问：
+
+```typescript
+// packages/agent/src/types.ts
+
+export interface AgentState {
+  systemPrompt: string;           // 系统提示词
+  model: Model<any>;              // 当前使用的模型
+  thinkingLevel: ThinkingLevel;   // 思考级别 (off/minimal/low/medium/high/xhigh)
+  tools: AgentTool<any>[];        // 可用工具列表
+  messages: AgentMessage[];       // 完整对话历史
+  isStreaming: boolean;           // 是否正在流式输出
+  streamMessage: AgentMessage | null;  // 当前流式消息（部分）
+  pendingToolCalls: Set<string>;  // 正在执行的工具调用
+  error?: string;                 // 错误信息
 }
 ```
 
-## 5. Agent 完整示例
+### 状态访问与修改
+
+```typescript
+const agent = new Agent({
+  initialState: {
+    systemPrompt: "You are a helpful coding assistant.",
+    model: getModel("anthropic", "claude-sonnet-4-20250514"),
+    tools: [readFileTool, writeFileTool],
+  },
+});
+
+// 读取状态
+console.log(agent.state.isStreaming);  // false
+console.log(agent.state.messages.length);  // 0
+
+// 修改状态
+agent.setSystemPrompt("New system prompt");
+agent.setModel(getModel("openai", "gpt-4o"));
+agent.setThinkingLevel("high");
+agent.setTools([newTool1, newTool2]);
+
+// 会话管理
+agent.sessionId = "session-123";  // 用于 Provider 缓存
+agent.replaceMessages(newMessages);  // 替换消息历史
+agent.appendMessage(message);  // 追加消息
+agent.clearMessages();  // 清空消息
+agent.reset();  // 重置所有状态
+```
+
+## 核心概念三：事件流
+
+Agent 通过事件流与外部通信，这是构建响应式 UI 的关键。
+
+### 事件类型全景
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Agent 生命周期                            │
+├─────────────────────────────────────────────────────────────────┤
+│  agent_start                                                    │
+│    │                                                            │
+│    ▼                                                            │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                      Turn 生命周期                       │   │
+│  │  turn_start                                             │   │
+│  │    │                                                    │   │
+│  │    ▼                                                    │   │
+│  │  ┌─────────────────────────────────────────────────┐   │   │
+│  │  │              Message 生命周期 (用户)              │   │   │
+│  │  │  message_start ──→ message_end                   │   │   │
+│  │  └─────────────────────────────────────────────────┘   │   │
+│  │    │                                                    │   │
+│  │    ▼                                                    │   │
+│  │  ┌─────────────────────────────────────────────────┐   │   │
+│  │  │            Message 生命周期 (助手)               │   │   │
+│  │  │  message_start                                   │   │   │
+│  │  │    │                                             │   │   │
+│  │  │    ▼                                             │   │   │
+│  │  │  message_update (多次，流式输出)                  │   │   │
+│  │  │    │                                             │   │   │
+│  │  │    ▼                                             │   │   │
+│  │  │  message_end                                     │   │   │
+│  │  └─────────────────────────────────────────────────┘   │   │
+│  │    │                                                    │   │
+│  │    ▼                                                    │   │
+│  │  ┌─────────────────────────────────────────────────┐   │   │
+│  │  │              Tool 生命周期 (可选)                │   │   │
+│  │  │  tool_execution_start                           │   │   │
+│  │  │    │                                             │   │   │
+│  │  │    ▼                                             │   │   │
+│  │  │  tool_execution_update (可选，流式工具)          │   │   │
+│  │  │    │                                             │   │   │
+│  │  │    ▼                                             │   │   │
+│  │  │  tool_execution_end                             │   │   │
+│  │  │    │                                             │   │   │
+│  │  │    ▼                                             │   │   │
+│  │  │  message_start ──→ message_end (toolResult)     │   │   │
+│  │  └─────────────────────────────────────────────────┘   │   │
+│  │    │                                                    │   │
+│  │    ▼                                                    │   │
+│  │  turn_end                                               │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│    │                                                            │
+│    ▼                                                            │
+│  agent_end                                                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 订阅事件
+
+```typescript
+const unsubscribe = agent.subscribe((event) => {
+  switch (event.type) {
+    case "agent_start":
+      console.log("Agent 开始处理");
+      break;
+      
+    case "message_start":
+      console.log(`消息开始: ${event.message.role}`);
+      break;
+      
+    case "message_update":
+      // 只有助手消息会触发 update
+      if (event.assistantMessageEvent.type === "text_delta") {
+        process.stdout.write(event.assistantMessageEvent.delta);
+      }
+      break;
+      
+    case "message_end":
+      console.log(`消息完成: ${event.message.role}`);
+      break;
+      
+    case "tool_execution_start":
+      console.log(`工具开始: ${event.toolName}`);
+      break;
+      
+    case "tool_execution_end":
+      console.log(`工具完成: ${event.toolName}, 是否错误: ${event.isError}`);
+      break;
+      
+    case "turn_end":
+      console.log(`Turn 完成，工具结果数: ${event.toolResults.length}`);
+      break;
+      
+    case "agent_end":
+      console.log(`Agent 完成，新增消息数: ${event.messages.length}`);
+      break;
+  }
+});
+
+// 取消订阅
+unsubscribe();
+```
+
+## 核心概念四：工具定义
+
+Agent 的工具比 pi-ai 的 Tool 更强大，增加了执行函数：
+
+```typescript
+// packages/agent/src/types.ts
+
+export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> 
+  extends Tool<TParameters> {
+  label: string;  // UI 显示用的标签
+  execute: (
+    toolCallId: string,
+    params: Static<TParameters>,
+    signal?: AbortSignal,
+    onUpdate?: AgentToolUpdateCallback<TDetails>,
+  ) => Promise<AgentToolResult<TDetails>>;
+}
+
+export interface AgentToolResult<T> {
+  content: (TextContent | ImageContent)[];  // 返回给 LLM 的内容
+  details: T;  // 额外详情（用于 UI 显示、日志等）
+}
+```
+
+### 定义工具示例
+
+```typescript
+import { Type } from "@sinclair/typebox";
+
+const readFileTool: AgentTool = {
+  name: "read_file",
+  label: "读取文件",  // 中文标签，用于 UI
+  description: "读取文件内容",
+  parameters: Type.Object({
+    path: Type.String({ description: "文件路径" }),
+  }),
+  execute: async (toolCallId, params, signal, onUpdate) => {
+    // 可选：流式更新进度
+    onUpdate?.({
+      content: [{ type: "text", text: "正在读取..." }],
+      details: { progress: 0 },
+    });
+    
+    const content = await fs.readFile(params.path, "utf-8");
+    
+    return {
+      content: [{ type: "text", text: content }],
+      details: { 
+        path: params.path, 
+        size: content.length,
+        lines: content.split("\n").length,
+      },
+    };
+  },
+};
+```
+
+### 工具错误处理
+
+**重要**：工具失败时**抛出错误**，不要返回错误内容：
+
+```typescript
+execute: async (toolCallId, params, signal) => {
+  // ✅ 正确：抛出错误
+  if (!fs.existsSync(params.path)) {
+    throw new Error(`文件不存在: ${params.path}`);
+  }
+  
+  // ❌ 错误：返回错误作为内容
+  if (!fs.existsSync(params.path)) {
+    return {
+      content: [{ type: "text", text: "Error: file not found" }],
+      details: {},
+    };
+  }
+  
+  return { content: [...], details: {...} };
+}
+```
+
+## 快速开始
+
+### 基础示例
 
 ```typescript
 import { Agent } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
 
 // 创建 Agent
 const agent = new Agent({
-  api: "openai/gpt-4o",
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// 注册工具
-agent.registerTool({
-  name: "get_weather",
-  description: "Get weather information for a city",
-  parameters: {
-    type: "object",
-    properties: {
-      city: { type: "string", description: "City name" },
-    },
-    required: ["city"],
-  },
-  execute: async (args) => {
-    const { city } = args;
-    // 调用天气 API
-    return `Weather in ${city}: Sunny, 25°C`;
+  initialState: {
+    systemPrompt: "你是一个有用的助手。",
+    model: getModel("anthropic", "claude-sonnet-4-20250514"),
   },
 });
 
-// 订阅事件
-agent.onEvent((event) => {
-  switch (event.type) {
-    case "message_update":
-      process.stdout.write(event.delta);
-      break;
-    case "tool_execution_start":
-      console.log(`\n[Using tool: ${event.toolName}]`);
-      break;
-    case "tool_execution_end":
-      console.log(`[Tool result: ${event.result}]`);
-      break;
+// 订阅事件（用于 UI 更新）
+agent.subscribe((event) => {
+  if (event.type === "message_update" && 
+      event.assistantMessageEvent.type === "text_delta") {
+    process.stdout.write(event.assistantMessageEvent.delta);
   }
 });
 
-// 运行 Agent
-const stream = agent.run("What's the weather in Beijing?");
-for await (const event of stream) {
-  // 处理事件...
-}
+// 发送消息
+await agent.prompt("你好，请介绍一下自己");
 ```
 
-## 核心设计原则
+### 带工具的示例
 
-1. **状态驱动** - 所有操作都围绕状态变化展开
-2. **事件驱动** - 使用事件流实现异步通信
-3. **消息队列** - 区分 steering 和 followUp 消息
-4. **工具集成** - 工具是一等公民，支持同步/异步执行
-5. **可观测性** - 丰富的事件类型便于调试和监控
+```typescript
+import { Type } from "@sinclair/typebox";
+
+// 定义计算器工具
+const calculatorTool: AgentTool = {
+  name: "calculate",
+  label: "计算器",
+  description: "执行数学计算",
+  parameters: Type.Object({
+    expression: Type.String({ description: "数学表达式，如 1 + 2" }),
+  }),
+  execute: async (toolCallId, params) => {
+    try {
+      // 注意：实际生产代码应使用安全的计算库
+      const result = eval(params.expression);  // ⚠️ 仅示例，不要生产使用
+      return {
+        content: [{ type: "text", text: String(result) }],
+        details: { expression: params.expression, result },
+      };
+    } catch (e) {
+      throw new Error(`计算错误: ${e.message}`);
+    }
+  },
+};
+
+const agent = new Agent({
+  initialState: {
+    systemPrompt: "你可以使用计算器工具帮助用户计算。",
+    model: getModel("openai", "gpt-4o-mini"),
+    tools: [calculatorTool],
+  },
+});
+
+// 订阅事件以观察工具调用
+agent.subscribe((event) => {
+  if (event.type === "tool_execution_start") {
+    console.log(`\n[工具开始] ${event.toolName}`);
+  }
+  if (event.type === "tool_execution_end") {
+    console.log(`[工具完成] 结果: ${event.result.content[0].text}`);
+  }
+});
+
+await agent.prompt("计算 123 * 456");
+```
+
+## 与 pi-ai 的关系
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    应用层 (你的代码)                      │
+│              使用 Agent 构建聊天界面、IDE 插件等           │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│              pi-agent (@mariozechner/pi-agent-core)      │
+│    ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
+│    │ Agent   │  │AgentLoop│  │AgentTool│  │ 事件系统 │  │
+│    │ 类     │  │ 函数    │  │ 接口    │  │        │  │
+│    └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  │
+└─────────┼────────────┼────────────┼────────────┼────────┘
+          │            │            │            │
+          └────────────┴────────────┴────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────┐
+│                 pi-ai (@mariozechner/pi-ai)              │
+│    ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
+│    │ stream  │  │complete │  │ Message │  │  Event  │  │
+│    │ 函数    │  │ 函数    │  │ 类型    │  │ 类型    │  │
+│    └─────────┘  └─────────┘  └─────────┘  └─────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## 总结
 
-pi-agent 的核心概念包括：
+pi-agent 的核心概念：
 
-1. **AgentState** - 管理 Agent 的运行状态
-2. **AgentMessage** - 定义消息类型和队列
-3. **AgentMessageEvent** - 事件驱动架构的核心
-4. **Tool** - 工具定义和执行机制
+1. **AgentMessage**: 灵活的消息抽象，支持自定义消息类型
+2. **AgentState**: 完整的状态管理，随时可访问和修改
+3. **事件流**: 细粒度的事件系统，支持构建响应式 UI
+4. **AgentTool**: 带执行函数的工具定义，支持流式更新
 
-这些概念相互配合，构成了一个完整的 Agent 运行时框架。在下一篇文章中，我们将深入 AgentLoop 的实现细节。
+这些概念共同构成了一个**生产级的 Agent 运行时**，让你可以：
+- 维护复杂的对话状态
+- 自动执行工具调用
+- 实时响应用户干预
+- 构建流畅的流式 UI
 
 ---
 
-**下篇预告：**《AgentLoop 设计与事件循环机制》 - 深入理解 Agent 的执行引擎。
+**下篇预告**: [02-agent-loop.md](02-agent-loop.md) —— 深入理解 AgentLoop 的事件循环机制，包括 Steering/Follow-up 干预系统、工具执行的并行/串行模式等。
