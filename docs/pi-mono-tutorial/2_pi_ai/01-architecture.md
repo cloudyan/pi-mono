@@ -33,31 +33,31 @@ pi-ai 采用**适配器模式（Adapter Pattern）** + **注册表模式（Regis
 
 ```mermaid
 flowchart TB
-    subgraph "统一接口层"
-        S[stream\(\)]
-        SS[streamSimple\(\)]
+    subgraph A["统一接口层"]
+        S["stream()"]
+        SS["streamSimple()"]
     end
-    
-    subgraph "类型系统层"
+
+    subgraph B["类型系统层"]
         M[Message]
         C[Content]
         E[Event]
     end
-    
-    subgraph "Provider 层"
+
+    subgraph C["Provider 层"]
         OP[OpenAI Provider]
         AP[Anthropic Provider]
         GP[Google Provider]
-        MP[... 其他 17+]
+        MP["... 其他 17+"]
     end
-    
-    subgraph "原始 API 层"
+
+    subgraph D["原始 API 层"]
         OA[OpenAI API]
         AA[Anthropic API]
         GA[Google API]
-        MA[... 其他 API]
+        MA["... 其他 API"]
     end
-    
+
     S --> M
     SS --> M
     M --> C
@@ -84,13 +84,13 @@ export async function* stream(
 ): AsyncGenerator<AgentMessageEvent> {
   // 1. 解析 API 标识
   const [providerName, modelId] = api.split("/");
-  
+
   // 2. 获取 Provider
   const provider = getApiProvider(providerName);
-  
+
   // 3. 调用 Provider 的 stream 方法
   const stream = await provider.stream(modelId, options);
-  
+
   // 4. 标准化事件流
   for await (const event of stream) {
     yield normalizeEvent(event);
@@ -189,11 +189,11 @@ export function getApiProvider(name: string): ApiProvider {
 // packages/ai/src/providers/openai.ts
 export const openaiProvider: ApiProvider = {
   name: "openai",
-  
+
   async stream(model: string, options: StreamOptions) {
     // 1. 转换消息格式
     const openaiMessages = options.messages.map(convertToOpenAIFormat);
-    
+
     // 2. 调用 OpenAI API
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -208,11 +208,11 @@ export const openaiProvider: ApiProvider = {
         tools: options.tools?.map(convertToolToOpenAIFormat),
       }),
     });
-    
+
     // 3. 解析流式响应并转换为统一事件
     return parseOpenAIStream(response);
   },
-  
+
   async getModels() {
     // 获取可用模型列表
     return [...];
@@ -313,25 +313,25 @@ export type AgentMessageEvent =
 ```typescript
 async function* parseOpenAIStream(response: Response) {
   const reader = response.body?.getReader();
-  
+
   yield { type: "start" };
   yield { type: "text_start" };
-  
+
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    
+
     // OpenAI 的流格式：data: {...}\n\ndata: {...}
     const lines = new TextDecoder().decode(value).split("\n");
     for (const line of lines) {
       if (line.startsWith("data: ")) {
         const data = JSON.parse(line.slice(6));
         const delta = data.choices[0]?.delta;
-        
+
         if (delta.content) {
           yield { type: "text_delta", data: delta.content };
         }
-        
+
         if (delta.tool_calls) {
           // 处理工具调用
           yield { type: "toolcall_start", ... };
@@ -339,7 +339,7 @@ async function* parseOpenAIStream(response: Response) {
       }
     }
   }
-  
+
   yield { type: "text_end" };
   yield { type: "done" };
 }
