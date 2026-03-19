@@ -466,56 +466,46 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
 
 ### 完整流程时序图
 
-```
-┌──────────────┐      ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│   调用者     │      │  outer 流   │      │  inner 流   │      │  Provider   │
-│              │      │ (空壳)      │      │ (实际)      │      │  模块       │
-└──────┬───────┘      └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
-       │                     │                     │                     │
-       │ stream(model)       │                     │                     │
-       ├────────────────────>│                     │                     │
-       │                     │                     │                     │
-       │                     │ loadModule()        │                     │
-       │                     ├────────────────────>│                     │
-       │                     │                     │                     │
-       │                     │                     │                     │
-       │ outer (立即返回)    │                     │                     │
-       │<────────────────────┤                     │                     │
-       │                     │                     │                     │
-       │ for await (event)   │                     │                     │
-       ├────────────────────>│                     │                     │
-       │                     │ [等待事件]          │                     │
-       │                     │                     │                     │
-       │                     │   module.loaded     │                     │
-       │                     │<────────────────────┤                     │
-       │                     │                     │                     │
-       │                     │ inner = stream()    │                     │
-       │                     ├────────────────────>│                     │
-       │                     │                     │                     │
-       │                     │ forwardStream 启动  │                     │
-       │                     │                     │                     │
-       │                     │                     │ text_delta: "Hello" │
-       │                     │<────────────────────┤                     │
-       │                     │                     │                     │
-       │ event: text_delta   │                     │                     │
-       │<────────────────────┤                     │                     │
-       │                     │                     │                     │
-       │ for await (event)   │                     │                     │
-       ├────────────────────>│                     │                     │
-       │                     │ [继续监听]          │                     │
-       │                     │                     │                     │
-       │                     │ text_delta: " World"|                     │
-       │                     │<────────────────────┤                     │
-       │                     │                     │                     │
-       │ event: text_delta   │                     │                     │
-       │<────────────────────┤                     │                     │
-       │                     │                     │                     │
-       │                     │                     │ done: "complete"    │
-       │                     │<────────────────────┤                     │
-       │                     │                     │                     │
-       │ event: done         │                     │                     │
-       │<────────────────────┤                     │                     │
-       │                     │                     │                     │
+```mermaid
+sequenceDiagram
+    participant Caller as 调用者
+    participant Outer as outer 流 (空壳)
+    participant Inner as inner 流 (实际)
+    participant Module as Provider 模块
+
+    Caller->>Outer: stream(model)
+    activate Outer
+
+    Outer->>Module: loadModule() (异步加载)
+    activate Module
+
+    Outer-->>Caller: 立即返回 outer
+
+    Caller->>Outer: for await (event)
+    activate Caller
+
+    Module-->>Outer: module.loaded
+    deactivate Module
+
+    Outer->>Inner: inner = stream()
+    activate Inner
+
+    Outer->>Inner: forwardStream(outer, inner)
+
+    loop 事件流转
+        Inner->>Inner: Provider IIFE 调用 API
+        Inner->>Outer: text_delta: "Hello"
+        Outer-->>Caller: event: text_delta
+
+        Inner->>Outer: text_delta: " World"
+        Outer-->>Caller: event: text_delta
+    end
+
+    Inner->>Outer: done: "complete"
+    deactivate Inner
+    Outer-->>Caller: event: done
+    deactivate Outer
+    deactivate Caller
 ```
 
 ### 深入：inner 和 outer 的关系与流转

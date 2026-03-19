@@ -6,7 +6,7 @@
 
 - 📚 篇章二：pi-ai 统一 LLM API
   - [0. 快速了解 pi-ai](/pi-mono-tutorial/2_pi_ai/00-README-zh.md)
-  - [FAQ. 常见问题解答](/pi-mono-tutorial/2_pi_ai/FAQ.md)
+  - [FAQ. pi-ai 问题解答](/pi-mono-tutorial/2_pi_ai/FAQ.md)
   - [1. pi-ai 架构设计](/pi-mono-tutorial/2_pi_ai/01-architecture.md)
   - [2. 类型系统深度解析](/pi-mono-tutorial/2_pi_ai/02-type-system.md)
   - [3. Provider 注册机制](/pi-mono-tutorial/2_pi_ai/03-provider-registry.md)
@@ -18,10 +18,11 @@
 
 - 📚 篇章三：pi-agent 运行时
   - [0. Agent 核心概念](/pi-mono-tutorial/3_pi_agent/00-README-zh.md)
-  - [1. AgentLoop 设计](/pi-mono-tutorial/3_pi_agent/01-agent-loop.md)
-  - [2. 工具调用与执行](/pi-mono-tutorial/3_pi_agent/02-tool-execution.md)
-  - [3. 消息转换与上下文管理](/pi-mono-tutorial/3_pi_agent/03-message-transform.md)
-  - [4. 高级模式](/pi-mono-tutorial/3_pi_agent/04-advanced-patterns.md)
+  - [1. 核心概念](/pi-mono-tutorial/3_pi_agent/01-core-concepts.md)
+  - [2. AgentLoop 设计](/pi-mono-tutorial/3_pi_agent/02-agent-loop.md)
+  - [3. 工具调用与执行](/pi-mono-tutorial/3_pi_agent/03-tool-execution.md)
+  - [4. 消息转换与上下文管理](/pi-mono-tutorial/3_pi_agent/04-message-transform.md)
+  - [5. 高级模式](/pi-mono-tutorial/3_pi_agent/05-advanced-patterns.md)
 
 - 📚 篇章四：pi-tui 终端 UI
   - [0. 快速开始](/pi-mono-tutorial/4_pi_tui/00-README-zh.md)

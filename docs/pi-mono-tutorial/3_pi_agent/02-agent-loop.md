@@ -22,49 +22,49 @@ AgentLoop 就是管理这个循环的核心机制。
 
 ## AgentLoop 架构
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        AgentLoop                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │   外层循环   │    │   内层循环   │    │  流式响应   │         │
-│  │  (Follow-up)│    │ (Tool Calls)│    │  处理      │         │
-│  └──────┬──────┘    └──────┬──────┘    └──────┬──────┘         │
-│         │                  │                  │                │
-│         ▼                  ▼                  ▼                │
-│  ┌─────────────────────────────────────────────────────────┐  │
-│  │                    事件发射器                            │  │
-│  │         (agent_start/turn_start/message_*/...)           │  │
-│  └─────────────────────────────────────────────────────────┘  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph AgentLoop["AgentLoop 架构"]
+        direction TB
+
+        subgraph Loops["双层循环"]
+            direction LR
+            Outer["外层循环<br/>(Follow-up)"]
+            Inner["内层循环<br/>(Tool Calls)"]
+            Stream["流式响应处理"]
+        end
+
+        Outer --> Inner --> Stream
+
+        subgraph Emitter["事件发射器"]
+            Events["agent_start / turn_start / message_* / ..."]
+        end
+
+        Loops --> Emitter
+    end
 ```
 
 ## 双层循环设计
 
 AgentLoop 采用**双层循环**设计：
 
-```
-外层循环：处理 Follow-up 消息队列
-    │
-    ├── 检查 steeringQueue → 有则进入内层循环
-    │
-    └── 检查 followUpQueue → 有则继续外层循环
-        │
-        └── 无则结束
+```mermaid
+flowchart TD
+    subgraph OuterLoop["外层循环：处理 Follow-up 消息队列"]
+        direction TB
+        O1["检查 steeringQueue"] -->|有消息| InnerLoop
+        O1 -->|无消息| O2["检查 followUpQueue"]
+        O2 -->|有消息| InnerLoop
+        O2 -->|无消息| End["结束"]
+    end
 
-内层循环：处理单轮对话（Turn）
-    │
-    ├── 处理 steeringQueue 中的消息
-    │
-    ├── 调用 LLM 获取响应
-    │
-    ├── 如有工具调用 → 执行工具
-    │       │
-    │       └── 回到内层循环开头（继续对话）
-    │
-    └── 无工具调用 → Turn 结束
+    subgraph InnerLoop["内层循环：处理单轮对话 Turn"]
+        direction TB
+        I1["处理 steeringQueue 消息"] --> I2["调用 LLM 获取响应"]
+        I2 --> I3{"有工具调用?"}
+        I3 -->|是| I4["执行工具"] --> I1
+        I3 -->|否| I5["Turn 结束"] --> O2
+    end
 ```
 
 ### 代码实现
@@ -312,16 +312,23 @@ async function streamAssistantResponse(
 
 为什么需要 `partialMessage`？
 
-```
-流式过程中：
-┌─────────────────────────────────────────┐
-│  message_start (partial)                │
-│    ├── text_delta: "Hello"              │
-│    ├── text_delta: "Hello, how"         │
-│    ├── text_delta: "Hello, how can"     │
-│    └── text_delta: "Hello, how can I"   │
-│  message_end (final)                    │
-└─────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant LLM as LLM 流式响应
+    participant Partial as Partial Message
+    participant UI as UI 层
+
+    LLM ->> Partial: message_start (partial)
+    LLM ->> Partial: text_delta: "Hello"
+    Partial ->> UI: 更新显示 "Hello"
+    LLM ->> Partial: text_delta: "Hello, how"
+    Partial ->> UI: 更新显示 "Hello, how"
+    LLM ->> Partial: text_delta: "Hello, how can"
+    Partial ->> UI: 更新显示 "Hello, how can"
+    LLM ->> Partial: text_delta: "Hello, how can I"
+    Partial ->> UI: 更新显示 "Hello, how can I"
+    LLM ->> Partial: message_end (final)
+    Partial ->> UI: 最终确认
 ```
 
 `partialMessage` 在流式过程中被**原地更新**，这样：
@@ -383,17 +390,68 @@ await agent.prompt("计算 123 * 456");
 
 ### 状态变化
 
+> **图表说明**：以下时序图展示了一个完整的 Agent 执行流程，包含用户消息、助手回复、工具调用和最终回复。
+> - **参与者**：`User`（用户）、`Agent`（Agent 运行时）、`LLM`（大语言模型）、`Tool`（工具执行）
+> - **状态标注**：每条消息右侧标注了关键状态变化
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant A as Agent
+    participant L as LLM
+    participant T as Tool
+
+    Note over A: isStreaming=false<br/>messages=[]<br/>pendingToolCalls={}<br/>streamMessage=null
+
+    U->>A: prompt("计算 123*456")
+    Note over A: messages=[userMsg]
+
+    A->>L: streamSimple()
+    Note over A: isStreaming=true
+
+    L-->>A: message_start
+    Note over A: streamMessage=partialAsst<br/>messages=[userMsg,partial]
+
+    loop 流式输出
+        L-->>A: message_update (text_delta)
+        Note over A: streamMessage 更新
+    end
+
+    L-->>A: message_end
+    Note over A: isStreaming=false<br/>streamMessage=null<br/>messages=[userMsg,asstMsg]
+
+    Note over A: pendingToolCalls={call_abc123}
+
+    A->>T: tool_execution_start
+    T-->>A: tool_execution_end
+    Note over A: pendingToolCalls={}
+
+    A->>A: message_start (toolResult)
+    Note over A: messages=[userMsg,asstMsg,toolResult]
+    A->>A: message_end (toolResult)
+
+    A->>L: streamSimple() (第二轮)
+    Note over A: isStreaming=true
+
+    L-->>A: message_start
+    Note over A: streamMessage=partialAsst2
+
+    loop 流式输出
+        L-->>A: message_update
+    end
+
+    L-->>A: message_end
+    Note over A: isStreaming=false<br/>streamMessage=null<br/>messages=[userMsg,asstMsg,toolResult,finalAsst]
+
+    A->>U: agent_end
 ```
-时间线 ─────────────────────────────────────────────────────────────►
 
-isStreaming:    false → true ──────────────────────────────────────→ false
-messages:       [] → [userMsg] → [userMsg, partialAsst] → [userMsg, asstMsg]
-                 → [userMsg, asstMsg, toolResult] → [userMsg, asstMsg, toolResult, finalAsst]
-
-pendingToolCalls:  {} → {"call_abc123"} → {}
-
-streamMessage:  null → partialAsst → null → partialAsst2 → null
-```
+**关键状态说明**：
+- **isStreaming**：`true` 表示正在流式接收 LLM 响应（message_start 到 message_end 之间）
+- **messages**：完整的对话历史数组，包含 user、assistant、toolResult 消息
+- **pendingToolCalls**：Set 集合，包含正在执行的工具调用 ID
+- **streamMessage**：当前流式消息的部分内容（仅在流式期间非空）
 
 ## 错误处理
 

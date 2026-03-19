@@ -125,7 +125,50 @@ export interface ThinkingBudgets {
 - Anthropic: `thinking_budget_tokens: number`
 - Google: `thinking: { budgetTokens: number }`
 
-pi-ai 使用 `ThinkingLevel` 统一映射到各 Provider 的具体实现。详见 ThinkingLevel 映射表
+pi-ai 使用 `ThinkingLevel` 统一映射到各 Provider 的具体实现。
+
+**ThinkingLevel 映射表：**
+
+pi-ai 使用统一的 `ThinkingLevel`（`minimal` | `low` | `medium` | `high` | `xhigh`），在不同 Provider 上映射为各自的参数：
+
+| Provider | 模型类型 | minimal | low | medium | high | xhigh |
+|---------|---------|---------|-----|--------|------|-------|
+| **OpenAI** | 所有模型 | `minimal` | `low` | `medium` | `high` | `xhigh`¹ |
+| **Anthropic** | Opus 4.6 / Sonnet 4.6 | `low` | `low` | `medium` | `high` | `max`² |
+| **Anthropic** | 旧模型 | 1024 tokens | 2048 tokens | 8192 tokens | 16384 tokens | 16384 tokens |
+| **Google** | Gemini 3 Pro | `LOW` | `LOW` | `HIGH` | `HIGH` | `HIGH` |
+| **Google** | Gemini 3 Flash | `MINIMAL` | `LOW` | `MEDIUM` | `HIGH` | `HIGH` |
+| **Google** | Gemini 2.5 Pro | 128 tokens | 2048 tokens | 8192 tokens | 32768 tokens | 32768 tokens |
+| **Google** | Gemini 2.5 Flash | 128 tokens | 2048 tokens | 8192 tokens | 24576 tokens | 24576 tokens |
+
+- ¹ 仅特定 OpenAI 模型支持 `xhigh`（如 o3、o1 Pro），其他模型会被映射为 `high`
+- ² 仅 Opus 4.6 支持 `max` 级别，其他 Anthropic 模型的 `xhigh` 会被映射为 `high`
+
+**映射实现原理：**
+
+```typescript
+// packages/ai/src/providers/simple-options.ts
+export function adjustMaxTokensForThinking(
+  baseMaxTokens: number,
+  modelMaxTokens: number,
+  reasoningLevel: ThinkingLevel,
+  customBudgets?: ThinkingBudgets,
+): { maxTokens: number; thinkingBudget: number } {
+  // 默认预算表（可被 customBudgets 覆盖）
+  const defaultBudgets: ThinkingBudgets = {
+    minimal: 1024,
+    low: 2048,
+    medium: 8192,
+    high: 16384,
+  };
+  // ...
+}
+
+// xhigh 处理：非 OpenAI 模型映射为 high
+export function clampReasoning(effort: ThinkingLevel | undefined) {
+  return effort === "xhigh" ? "high" : effort;
+}
+```
 
 ## 第 2 层：模型类型层
 
@@ -200,7 +243,40 @@ interface Model<"anthropic-messages"> {
 
 ## 第 3 层：消息类型层
 
+Message 是容器，Content 是内容。一个 Message 可以包含多个 Content 块。
+
+**层级关系**
+
+```bash
+Message (消息层)
+  └── content: Content[] (内容层)
+      ├── TextContent
+      ├── ThinkingContent
+      ├── ImageContent
+      └── ToolCall
+```
+
+**核心理解**
+
+| 维度 | Content | Message |
+|------|---------|---------|
+| **是什么** | 内容块（Content Block） | 消息（完整对话单元） |
+| **联合类型** | `TextContent \| ThinkingContent \| ImageContent \| ToolCall` | `UserMessage \| AssistantMessage \| ToolResultMessage` |
+| **标识字段** | `type: "text" \| "thinking" \| "image" \| "toolCall"` | `role: "user" \| "assistant" \| "toolResult"` |
+| **职责** | 描述"说什么"——内容的具体格式 | 描述"谁说的"——消息的发送者角色 |
+| **使用场景** | 解析内容格式、渲染不同块类型 | 对话管理、轮次控制 |
+
+**关键区别：type vs role**
+
+- `role` 是 **Message 层** 的标识符，用于区分消息发送者（用户、助手、工具结果）
+- `type` 是 **Content 层** 的标识符，用于区分内容格式（文本、思考、图片、工具调用）
+- 类型收窄时先用 `role` 确定消息类型，再用 `type` 确定内容块类型
+
+---
+
 ### Content 联合类型
+
+描述内容块的结构，每个类型用 `type` 字段区分
 
 ```typescript
 export interface TextContent {
@@ -232,6 +308,8 @@ export interface ToolCall {
 ```
 
 ### Message 联合类型
+
+描述消息角色的结构，每个类型用 role 字段区分
 
 ```typescript
 export interface UserMessage {
@@ -265,6 +343,17 @@ export interface ToolResultMessage<TDetails = any> {
 
 export type Message = UserMessage | AssistantMessage | ToolResultMessage;
 ```
+
+role vs type 的区别
+
+- role
+  - 作用域: Message 层
+  - 取值: "user" | "assistant" | "toolResult"
+  - 用途：区分消息发送者，用于对话轮次管理
+- type
+  - 作用域: Content 层 / 事件层
+  - 取值: "text" | "thinking" | "image" | "toolCall"
+  - 用途: 区分内容格式，用于渲染和解析
 
 **设计要点：**
 
@@ -354,24 +443,147 @@ export type AssistantMessageEvent =
   | { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage };
 ```
 
-**为什么每个事件都有 `partial`？**
+### 为什么每个事件都有 `partial`？
+
+设计目的：`partial` 是当前 `AssistantMessage` 的**完整快照**，而不是增量片段。这是 pi-ai 事件协议最核心的设计之一。
+
+#### 核心价值
+
+1. **UI 实时更新** - 无需手动合并状态
+2. **状态管理简化** - 单一数据源
+3. **多内容块并发处理** - 同时处理文本、思考、工具调用
+4. **流式 JSON 解析** - 工具参数的渐进式更新
+5. **错误恢复** - 中断时仍可访问已累积的内容
+
+#### 对比：有 partial vs 无 partial
+
+**有 partial（简化模式）：**
 
 ```typescript
-const s = stream(model, context);
+for await (const event of stream) {
+  // 直接使用 partial 更新 UI，无需手动合并
+  message = event.partial;
+  render(message);
+}
+```
 
-for await (const event of s) {
-  // event.partial 是当前的 AssistantMessage 快照
-  // 可以用来实时更新 UI
-  console.log("当前消息状态:", event.partial);
+**无 partial（复杂模式）：**
+
+```typescript
+let message: AssistantMessage = { content: [] };
+let currentTextBlock: TextContent | null = null;
+let currentToolCall: ToolCall | null = null;
+
+for await (const event of stream) {
+  switch (event.type) {
+    case "text_delta":
+      // 手动追加文本
+      currentTextBlock!.text += event.delta;
+      // 手动更新 message.content
+      message.content[currentTextBlockIndex!] = currentTextBlock!;
+      break;
+    case "toolcall_delta":
+      // 手动解析 JSON
+      currentToolCall!.arguments = JSON.parse(partialJson + event.delta);
+      // 手动更新 message.content
+      message.content[currentToolCallIndex!] = currentToolCall!;
+      break;
+  }
+}
+```
+
+#### 实战：Agent Loop 中的使用
+
+```typescript
+// packages/agent/src/agent-loop.ts:276-297
+for await (const event of response) {
+  switch (event.type) {
+    case "start":
+      // event.partial 是完整的 AssistantMessage 对象
+      partialMessage = event.partial;
+      context.messages.push(partialMessage);
+      emit({ type: "message_start", message: { ...partialMessage } });
+      break;
+
+    case "text_delta":
+    case "thinking_delta":
+    case "toolcall_delta":
+      // 直接用 partial 更新消息，无需手动合并
+      partialMessage = event.partial;
+      context.messages[context.messages.length - 1] = partialMessage;
+      emit({
+        type: "message_update",
+        message: partialMessage,
+      });
+      break;
+  }
+}
+```
+
+#### 多内容块并发处理
+
+一个 AssistantMessage 可以同时包含多个内容块（文本 + 思考 + 工具调用）：
+
+```typescript
+for await (const event of stream) {
+  // contentIndex 指向当前正在更新的内容块
+  // partial.content 包含所有已创建的内容块
 
   if (event.type === "text_delta") {
     // 获取当前文本块的索引
     const textBlock = event.partial.content[event.contentIndex];
-    if (textBlock?.type === "text") {
-      console.log("当前文本:", textBlock.text);
-    }
+    console.log("当前文本:", textBlock.text);  // 完整文本，不是增量
+  }
+
+  if (event.type === "toolcall_delta") {
+    const toolCall = event.partial.content[event.contentIndex];
+    console.log("工具参数:", toolCall.arguments);  // 解析后的完整 JSON
   }
 }
+```
+
+#### 流式 JSON 解析
+
+工具调用的参数是流式 JSON，`partial` 让渐进式 UI 成为可能：
+
+```typescript
+// Provider 内部实现（packages/ai/src/providers/anthropic.ts:345-357）
+else if (event.delta.type === "input_json_delta") {
+  const block = blocks[index];
+  if (block && block.type === "toolCall") {
+    block.partialJson += event.delta.partial_json;
+    // 流式解析 JSON（可能不完整）
+    block.arguments = parseStreamingJson(block.partialJson);
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex: index,
+      delta: event.delta.partial_json,
+      partial: output,  // 包含 arguments 的当前解析结果
+    });
+  }
+}
+```
+
+```typescript
+// 使用方可以实时更新 UI（packages/ai/README.md:291-296）
+for await (const event of s) {
+  if (event.type === 'toolcall_delta') {
+    const toolCall = event.partial.content[event.contentIndex];
+    // toolCall.arguments 包含部分解析的 JSON
+    // 可以显示 "正在调用 toolName({a: 1, b: 2...}"
+  }
+}
+```
+
+#### 错误恢复
+
+当发生错误时，`partial` 包含到错误发生时的所有累积数据：
+
+```typescript
+// 错误事件也包含完整的 output 对象
+{ type: "error", reason: "aborted", error: AssistantMessage }
+
+// 即使请求被中断，仍可从已生成的部分内容中恢复
 ```
 
 ### 事件流的生命周期
@@ -446,49 +658,6 @@ const s = stream(model, context, {
   thinkingEnabled: true,
   thinkingBudgetTokens: 8192,
 });
-```
-
-**ThinkingLevel 映射表：**
-
-pi-ai 使用统一的 `ThinkingLevel`（`minimal` | `low` | `medium` | `high` | `xhigh`），在不同 Provider 上映射为各自的参数：
-
-| Provider | 模型类型 | minimal | low | medium | high | xhigh |
-|---------|---------|---------|-----|--------|------|-------|
-| **OpenAI** | 所有模型 | `minimal` | `low` | `medium` | `high` | `xhigh`¹ |
-| **Anthropic** | Opus 4.6 / Sonnet 4.6 | `low` | `low` | `medium` | `high` | `max`² |
-| **Anthropic** | 旧模型 | 1024 tokens | 2048 tokens | 8192 tokens | 16384 tokens | 16384 tokens |
-| **Google** | Gemini 3 Pro | `LOW` | `LOW` | `HIGH` | `HIGH` | `HIGH` |
-| **Google** | Gemini 3 Flash | `MINIMAL` | `LOW` | `MEDIUM` | `HIGH` | `HIGH` |
-| **Google** | Gemini 2.5 Pro | 128 tokens | 2048 tokens | 8192 tokens | 32768 tokens | 32768 tokens |
-| **Google** | Gemini 2.5 Flash | 128 tokens | 2048 tokens | 8192 tokens | 24576 tokens | 24576 tokens |
-
-¹ 仅特定 OpenAI 模型支持 `xhigh`（如 o3、o1 Pro），其他模型会被映射为 `high`
-² 仅 Opus 4.6 支持 `max` 级别，其他 Anthropic 模型的 `xhigh` 会被映射为 `high`
-
-**映射实现原理：**
-
-```typescript
-// packages/ai/src/providers/simple-options.ts
-export function adjustMaxTokensForThinking(
-  baseMaxTokens: number,
-  modelMaxTokens: number,
-  reasoningLevel: ThinkingLevel,
-  customBudgets?: ThinkingBudgets,
-): { maxTokens: number; thinkingBudget: number } {
-  // 默认预算表（可被 customBudgets 覆盖）
-  const defaultBudgets: ThinkingBudgets = {
-    minimal: 1024,
-    low: 2048,
-    medium: 8192,
-    high: 16384,
-  };
-  // ...
-}
-
-// xhigh 处理：非 OpenAI 模型映射为 high
-export function clampReasoning(effort: ThinkingLevel | undefined) {
-  return effort === "xhigh" ? "high" : effort;
-}
 ```
 
 ### Context - 对话上下文
@@ -663,6 +832,7 @@ pi-ai 的类型系统设计非常精妙：
 3. **条件类型**：`compat` 根据 API 类型自动变化
 4. **严格约束**：每个字段都有明确的类型，减少运行时错误
 5. **可序列化**：`Context` 支持完整 JSON 序列化
+6. **事件快照**：`partial` 提供完整的状态快照，简化流式处理
 
 这种设计让代码既安全又易用，是 TypeScript 类型系统应用的典范。
 

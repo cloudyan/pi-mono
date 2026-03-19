@@ -1,13 +1,18 @@
-# packages/ai 问题列表
+# packages/ai 问题解答
 
-- [packages/ai 问题列表](#packagesai-问题列表)
-      - [1. 对于 const model = getModel('openai', 'gpt-4o-mini'); model 相关的配置从哪里来的？](#1-对于-const-model--getmodelopenai-gpt-4o-mini-model-相关的配置从哪里来的)
-      - [2. maxTokens 配置与截断检测](#2-maxtokens-配置与截断检测)
-      - [3. TypeBox vs Zod 什么差别，优劣？\*\*](#3-typebox-vs-zod-什么差别优劣)
-      - [4. stream() 返回的是什么？result() 方法的作用](#4-stream-返回的是什么result-方法的作用)
+## 目录
+
+- [packages/ai 问题解答](#packagesai-问题解答)
+  - [目录](#目录)
+  - [1. 对于 const model = getModel('openai', 'gpt-4o-mini'); model 相关的配置从哪里来的？](#1-对于-const-model--getmodelopenai-gpt-4o-mini-model-相关的配置从哪里来的)
+  - [2. maxTokens 配置与截断检测](#2-maxtokens-配置与截断检测)
+  - [3. TypeBox vs Zod 什么差别，优劣？\*\*](#3-typebox-vs-zod-什么差别优劣)
+  - [4. stream() 返回的是什么？result() 方法的作用](#4-stream-返回的是什么result-方法的作用)
+  - [5. budgetTokens 是什么作用，还可以 -1 设置动态？](#5-budgettokens-是什么作用还可以--1-设置动态)
+  - [6. 中止的消息可以添加到对话上下文并在后续请求中继续？](#6-中止的消息可以添加到对话上下文并在后续请求中继续)
 
 
-#### 1. 对于 const model = getModel('openai', 'gpt-4o-mini'); model 相关的配置从哪里来的？
+## 1. 对于 const model = getModel('openai', 'gpt-4o-mini'); model 相关的配置从哪里来的？
 
 **A: 配置来源与机制**
 
@@ -63,7 +68,7 @@ console.log(model.maxTokens);      // 16384
 console.log(model.cost.input);     // 0.15
 ```
 
-#### 2. maxTokens 配置与截断检测
+## 2. maxTokens 配置与截断检测
 
 **Q: `maxTokens` 应该配置多大？**
 
@@ -111,7 +116,7 @@ if (response.stopReason === 'length') {
 - `"stop"` - 正常完成
 - `"toolUse"` - 因工具调用而停止
 
-#### 3. TypeBox vs Zod 什么差别，优劣？**
+## 3. TypeBox vs Zod 什么差别，优劣？**
 
 pi-ai 定义工具（使用 TypeBox 实现类型安全）
 
@@ -194,7 +199,7 @@ const tool = {
 };
 ```
 
-#### 4. stream() 返回的是什么？result() 方法的作用
+## 4. stream() 返回的是什么？result() 方法的作用
 
 **Q: `const s = stream(model, context)` 返回的 `s` 是流还是 Promise？`
 
@@ -267,7 +272,7 @@ for await (const chunk of stream) {
 | `complete()` | `Promise<AssistantMessage>` | 非流式，直接返回完整结果 |
 
 
-#### 5. budgetTokens 是什么作用，还可以 -1 设置动态？
+## 5. budgetTokens 是什么作用，还可以 -1 设置动态？
 
 **A: `budgetTokens` 是 Google Gemini 模型推理/思考（thinking）功能的 token 预算参数**
 
@@ -340,15 +345,15 @@ const response = await completeSimple(model, context, {
 - Anthropic 和 OpenAI 没有 `-1` 概念，pi-ai 在内部自动转换
 
 
-#### 6. 中止的消息可以添加到对话上下文并在后续请求中继续？啥意思，没明白
+## 6. 中止的消息可以添加到对话上下文并在后续请求中继续？
 
 **A: 这是 pi-ai 的一个强大特性：即使请求被中止，已生成的部分内容也可以被保留并用于继续对话。**
 
-### 核心概念
+**核心概念**
 
 当你主动中止（取消）一个正在进行的 AI 请求后，**已经生成的部分回复内容可以被保留下来**，作为对话历史的一部分，然后在新的请求中继续对话。
 
-### 典型使用场景
+**典型使用场景**
 
 | 场景 | 说明 |
 |------|------|
@@ -357,7 +362,7 @@ const response = await completeSimple(model, context, {
 | **流式交互** | 类似 ChatGPT 的"继续生成"功能 |
 | **避免重复** | 保留已生成的思考过程或内容 |
 
-### 代码示例
+**代码示例**
 
 ```typescript
 const context = {
@@ -380,7 +385,7 @@ context.messages.push({ role: 'user', content: '请继续' });  // ← 要求继
 const continuation = await complete(model, context);
 ```
 
-### 关键点说明
+**关键点说明**
 
 1. **`partial` 包含什么**：虽然请求被中止，但 `partial` 是一个完整的 `AssistantMessage` 对象，包含了已生成的部分内容、token 使用量等信息
 
@@ -390,7 +395,7 @@ const continuation = await complete(model, context);
 
 4. **跨 Provider 支持**：pi-ai 支持在不同 Provider 之间继续对话，思考块等内容会自动转换格式
 
-### 实际应用示例
+**实际应用示例**
 
 ```typescript
 // 场景：生成长篇文章，分段获取

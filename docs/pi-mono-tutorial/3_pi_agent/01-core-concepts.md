@@ -16,16 +16,36 @@ pi-agent 就是为解决这些问题而生的。
 
 Agent 是一个**有状态的对话管理器**，它在用户和 LLM 之间架起桥梁：
 
-```
-┌─────────────┐     ┌─────────────────────────────────────┐     ┌─────────┐
-│    用户      │────→│              Agent                   │────→│   LLM   │
-│  (输入问题)  │     │  ┌─────────┐  ┌─────────┐  ┌───────┐ │     │         │
-└─────────────┘     │  │ 状态管理 │  │ 消息转换 │  │ 工具执行│ │     └─────────┘
-       ↑            │  └─────────┘  └─────────┘  └───────┘ │          │
-       │            │  ┌─────────┐  ┌─────────┐            │          │
-       └────────────│──│ 事件流   │  │ 干预机制 │            │←─────────┘
-        (接收回复)   │  └─────────┘  └─────────┘            │   (流式响应)
-                    └─────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph User[" "]
+        U1[用户输入问题]
+        U2[用户接收回复]
+    end
+
+    subgraph AgentCore["Agent"]
+        direction TB
+        State[状态管理]
+        Msg[消息转换]
+        Tool[工具执行]
+        Event[事件流]
+        Intervene[干预机制]
+    end
+
+    subgraph LLM[" "]
+        L1[LLM]
+    end
+
+    U1 --> AgentCore
+    AgentCore <--> L1
+    AgentCore --> U2
+
+    style AgentCore fill:#f5f5f5,stroke:#333,stroke-width:2px
+    style State fill:#e1f5fe
+    style Msg fill:#e1f5fe
+    style Tool fill:#e1f5fe
+    style Event fill:#e1f5fe
+    style Intervene fill:#e1f5fe
 ```
 
 与直接使用 pi-ai 的 `streamSimple` 不同，Agent 提供了：
@@ -76,7 +96,7 @@ declare module "@mariozechner/pi-agent-core" {
       code: string;
       timestamp: number;
     };
-    
+
     // 系统通知（仅 UI 使用）
     notification: {
       role: "notification";
@@ -100,10 +120,21 @@ const previewMsg: AgentMessage = {
 
 自定义消息不会直接发送给 LLM，需要经过 `convertToLlm` 转换：
 
+```mermaid
+flowchart LR
+    A["AgentMessage[]"] -->|transformContext| B["AgentMessage[]"]
+    B -->|convertToLlm| C["Message[]"]
+    C --> D["LLM"]
+
+    style A fill:#e3f2fd,stroke:#1565c0
+    style B fill:#e8f5e9,stroke:#2e7d32
+    style C fill:#fff3e0,stroke:#ef6c00
+    style D fill:#f3e5f5,stroke:#6a1b9a
 ```
-AgentMessage[] → transformContext() → AgentMessage[] → convertToLlm() → Message[] → LLM
-                    (可选：修剪上下文)              (必需：过滤+转换)
-```
+
+> **转换说明：**
+> - `transformContext()`：**可选**，用于修剪上下文
+> - `convertToLlm()`：**必需**，用于过滤和转换消息
 
 ```typescript
 const agent = new Agent({
@@ -177,57 +208,55 @@ Agent 通过事件流与外部通信，这是构建响应式 UI 的关键。
 
 ### 事件类型全景
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Agent 生命周期                            │
-├─────────────────────────────────────────────────────────────────┤
-│  agent_start                                                    │
-│    │                                                            │
-│    ▼                                                            │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                      Turn 生命周期                       │   │
-│  │  turn_start                                             │   │
-│  │    │                                                    │   │
-│  │    ▼                                                    │   │
-│  │  ┌─────────────────────────────────────────────────┐   │   │
-│  │  │              Message 生命周期 (用户)              │   │   │
-│  │  │  message_start ──→ message_end                   │   │   │
-│  │  └─────────────────────────────────────────────────┘   │   │
-│  │    │                                                    │   │
-│  │    ▼                                                    │   │
-│  │  ┌─────────────────────────────────────────────────┐   │   │
-│  │  │            Message 生命周期 (助手)               │   │   │
-│  │  │  message_start                                   │   │   │
-│  │  │    │                                             │   │   │
-│  │  │    ▼                                             │   │   │
-│  │  │  message_update (多次，流式输出)                  │   │   │
-│  │  │    │                                             │   │   │
-│  │  │    ▼                                             │   │   │
-│  │  │  message_end                                     │   │   │
-│  │  └─────────────────────────────────────────────────┘   │   │
-│  │    │                                                    │   │
-│  │    ▼                                                    │   │
-│  │  ┌─────────────────────────────────────────────────┐   │   │
-│  │  │              Tool 生命周期 (可选)                │   │   │
-│  │  │  tool_execution_start                           │   │   │
-│  │  │    │                                             │   │   │
-│  │  │    ▼                                             │   │   │
-│  │  │  tool_execution_update (可选，流式工具)          │   │   │
-│  │  │    │                                             │   │   │
-│  │  │    ▼                                             │   │   │
-│  │  │  tool_execution_end                             │   │   │
-│  │  │    │                                             │   │   │
-│  │  │    ▼                                             │   │   │
-│  │  │  message_start ──→ message_end (toolResult)     │   │   │
-│  │  └─────────────────────────────────────────────────┘   │   │
-│  │    │                                                    │   │
-│  │    ▼                                                    │   │
-│  │  turn_end                                               │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│    │                                                            │
-│    ▼                                                            │
-│  agent_end                                                      │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph AgentLifecycle["Agent 生命周期"]
+        direction TB
+
+        Start([agent_start]) --> TurnStart[turn_start]
+
+        subgraph Turn["Turn 生命周期"]
+            direction TB
+
+            subgraph UserMsg["Message 生命周期 (用户)"]
+                direction LR
+                UM1[message_start] --> UM2[message_end]
+            end
+
+            subgraph AssistantMsg["Message 生命周期 (助手)"]
+                direction TB
+                AM1[message_start] --> AM2[message_update<br/>流式输出]
+                AM2 --> AM2
+                AM2 --> AM3[message_end]
+            end
+
+            subgraph Tool["Tool 生命周期 (可选)"]
+                direction TB
+                T1[tool_execution_start] --> T2[tool_execution_update<br/>可选]
+                T2 --> T3[tool_execution_end]
+                T3 --> T4[message_start<br/>toolResult]
+                T4 --> T5[message_end]
+            end
+
+            TurnStart --> UserMsg
+            UserMsg --> AssistantMsg
+            AssistantMsg --> Tool
+            Tool --> TurnEnd[turn_end]
+            AssistantMsg -.->|无需工具| TurnEnd
+        end
+
+        TurnEnd --> Continue{继续?}
+        Continue -->|是| TurnStart
+        Continue -->|否| End([agent_end])
+    end
+
+    style Start fill:#c8e6c9,stroke:#333
+    style End fill:#ffcdd2,stroke:#333
+    style AgentLifecycle fill:#fafafa,stroke:#666,stroke-width:2px
+    style Turn fill:#f5f5f5,stroke:#666,stroke-width:2px
+    style UserMsg fill:#e3f2fd
+    style AssistantMsg fill:#fff3e0
+    style Tool fill:#f3e5f5
 ```
 
 ### 订阅事件
@@ -238,34 +267,34 @@ const unsubscribe = agent.subscribe((event) => {
     case "agent_start":
       console.log("Agent 开始处理");
       break;
-      
+
     case "message_start":
       console.log(`消息开始: ${event.message.role}`);
       break;
-      
+
     case "message_update":
       // 只有助手消息会触发 update
       if (event.assistantMessageEvent.type === "text_delta") {
         process.stdout.write(event.assistantMessageEvent.delta);
       }
       break;
-      
+
     case "message_end":
       console.log(`消息完成: ${event.message.role}`);
       break;
-      
+
     case "tool_execution_start":
       console.log(`工具开始: ${event.toolName}`);
       break;
-      
+
     case "tool_execution_end":
       console.log(`工具完成: ${event.toolName}, 是否错误: ${event.isError}`);
       break;
-      
+
     case "turn_end":
       console.log(`Turn 完成，工具结果数: ${event.toolResults.length}`);
       break;
-      
+
     case "agent_end":
       console.log(`Agent 完成，新增消息数: ${event.messages.length}`);
       break;
@@ -283,7 +312,7 @@ Agent 的工具比 pi-ai 的 Tool 更强大，增加了执行函数：
 ```typescript
 // packages/agent/src/types.ts
 
-export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> 
+export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any>
   extends Tool<TParameters> {
   label: string;  // UI 显示用的标签
   execute: (
@@ -318,13 +347,13 @@ const readFileTool: AgentTool = {
       content: [{ type: "text", text: "正在读取..." }],
       details: { progress: 0 },
     });
-    
+
     const content = await fs.readFile(params.path, "utf-8");
-    
+
     return {
       content: [{ type: "text", text: content }],
-      details: { 
-        path: params.path, 
+      details: {
+        path: params.path,
         size: content.length,
         lines: content.split("\n").length,
       },
@@ -343,7 +372,7 @@ execute: async (toolCallId, params, signal) => {
   if (!fs.existsSync(params.path)) {
     throw new Error(`文件不存在: ${params.path}`);
   }
-  
+
   // ❌ 错误：返回错误作为内容
   if (!fs.existsSync(params.path)) {
     return {
@@ -351,7 +380,7 @@ execute: async (toolCallId, params, signal) => {
       details: {},
     };
   }
-  
+
   return { content: [...], details: {...} };
 }
 ```
@@ -374,7 +403,7 @@ const agent = new Agent({
 
 // 订阅事件（用于 UI 更新）
 agent.subscribe((event) => {
-  if (event.type === "message_update" && 
+  if (event.type === "message_update" &&
       event.assistantMessageEvent.type === "text_delta") {
     process.stdout.write(event.assistantMessageEvent.delta);
   }
@@ -434,31 +463,33 @@ await agent.prompt("计算 123 * 456");
 
 ## 与 pi-ai 的关系
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    应用层 (你的代码)                      │
-│              使用 Agent 构建聊天界面、IDE 插件等           │
-└─────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────┐
-│              pi-agent (@mariozechner/pi-agent-core)      │
-│    ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
-│    │ Agent   │  │AgentLoop│  │AgentTool│  │ 事件系统 │  │
-│    │ 类     │  │ 函数    │  │ 接口    │  │        │  │
-│    └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  │
-└─────────┼────────────┼────────────┼────────────┼────────┘
-          │            │            │            │
-          └────────────┴────────────┴────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────┐
-│                 pi-ai (@mariozechner/pi-ai)              │
-│    ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  │
-│    │ stream  │  │complete │  │ Message │  │  Event  │  │
-│    │ 函数    │  │ 函数    │  │ 类型    │  │ 类型    │  │
-│    └─────────┘  └─────────┘  └─────────┘  └─────────┘  │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph App["应用层（你的代码）"]
+        AppDesc[使用 Agent 构建聊天界面、IDE 插件等]
+    end
+
+    subgraph PiAgent["pi-agent (@mariozechner/pi-agent-core)"]
+        Agent[Agent 类]
+        Loop[AgentLoop 函数]
+        Tool[AgentTool 接口]
+        Events[事件系统]
+    end
+
+    subgraph PiAi["pi-ai (@mariozechner/pi-ai)"]
+        Stream[stream 函数]
+        Complete[complete 函数]
+        Msg[Message 类型]
+        Ev[Event 类型]
+    end
+
+    App --> PiAgent
+    Agent & Loop & Tool & Events -.-> PiAi
+    PiAgent --> PiAi
+
+    style App fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style PiAgent fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style PiAi fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
 ```
 
 ## 总结
