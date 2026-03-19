@@ -6,6 +6,7 @@
 
 - 📚 篇章二：pi-ai 统一 LLM API
   - [0. 快速了解 pi-ai](/pi-mono-tutorial/2_pi_ai/00-README-zh.md)
+  - [FAQ. 常见问题解答](/pi-mono-tutorial/2_pi_ai/FAQ.md)
   - [1. pi-ai 架构设计](/pi-mono-tutorial/2_pi_ai/01-architecture.md)
   - [2. 类型系统深度解析](/pi-mono-tutorial/2_pi_ai/02-type-system.md)
   - [3. Provider 注册机制](/pi-mono-tutorial/2_pi_ai/03-provider-registry.md)
@@ -48,16 +49,30 @@
   - [4. 后端集成](/pi-mono-tutorial/6_pi_web_ui/04-integration-backend.md)
   - [5. 高级功能](/pi-mono-tutorial/6_pi_web_ui/05-advanced-features.md)
 
-- 📚 篇章七：扩展与技能系统
-  - [36. 扩展系统设计](/pi-mono-tutorial/7_extension/01-extension-system.md)
-  - [37. 技能系统](/pi-mono-tutorial/7_extension/02-skill-system.md)
+- 📚 篇章七：pi-pods GPU Pod 管理
+  - [0. 快速了解](/pi-mono-tutorial/7_pods/00-README-zh.md)
+  - [1. Pod 管理基础](/pi-mono-tutorial/7_pods/01-pod-management.md)
+  - [2. 模型部署与配置](/pi-mono-tutorial/7_pods/02-model-deployment.md)
+  - [3. Agent 交互模式](/pi-mono-tutorial/7_pods/03-agent-interface.md)
 
-- 📚 篇章八：学习心得
-  - [38. 从源码中学到的设计模式](/pi-mono-tutorial/8_learn/01-design-patterns.md)
-  - [39. TypeScript 高级技巧实践](/pi-mono-tutorial/8_learn/02-typescript-tips.md)
+- 📚 篇章八：mom - Slack Bot 与 Agent 编排
+  - [0. 官方 README 中文翻译](/pi-mono-tutorial/8_mom/00-README-zh.md)
+  - [1. 架构与核心概念](/pi-mono-tutorial/8_mom/01-mom-architecture.md)
+  - [2. Skill 系统详解](/pi-mono-tutorial/8_mom/02-skill-system.md)
+  - [3. 事件系统](/pi-mono-tutorial/8_mom/03-events-system.md)
+  - [4. 安全指南](/pi-mono-tutorial/8_mom/04-security-guide.md)
 
-- 📚 篇章九：项目构建与发布
-  - [40. 项目构建流程：从源码到发布的完整流转](/pi-mono-tutorial/9_building/01-building-workflow.md)
+- 📚 篇章九：pi-coding-agent 扩展系统
+  - [0. 扩展系统概览](/pi-mono-tutorial/9_coding-agent-extensions/README.md)
+  - [1. 事件驱动架构](/pi-mono-tutorial/9_coding-agent-extensions/01-extension-events.md)
+  - [2. Extension API 详解](/pi-mono-tutorial/9_coding-agent-extensions/02-extension-api.md)
+
+- 📚 附录：学习心得
+  - [从源码中学到的设计模式](/guides/01-design-patterns.md)
+  - [TypeScript 高级技巧实践](/guides/02-typescript-tips.md)
+
+- 📚 内部：项目构建与发布
+  - [项目构建流程：从源码到发布的完整流转](/internal/01-building-workflow.md)
 
 ---
 

@@ -325,8 +325,8 @@ export interface Model<TApi extends Api> {
 		cacheRead: number; // $/million tokens
 		cacheWrite: number; // $/million tokens
 	};
-	contextWindow: number;
-	maxTokens: number;
+	contextWindow: number; // 上下文窗口大小（总token数）
+	maxTokens: number; // 单次响应最大token数
 	headers?: Record<string, string>;
 	/** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
 	compat?: TApi extends "openai-completions"

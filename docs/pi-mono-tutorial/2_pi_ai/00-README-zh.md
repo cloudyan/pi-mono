@@ -562,9 +562,9 @@ setTimeout(() => controller1.abort(), 2000);
 
 const partial = await complete(model, context, { signal: controller1.signal });
 
-// 将部分响应添加到上下文
-context.messages.push(partial);
-context.messages.push({ role: 'user', content: '请继续' });
+// 关键：将部分响应添加到上下文
+context.messages.push(partial);  // ← 保存已生成的部分内容
+context.messages.push({ role: 'user', content: '请继续' }); // 再看到用户说"请继续"，就会理解需要接着之前的内容继续
 
 // 继续对话
 const continuation = await complete(model, context);
@@ -577,12 +577,21 @@ const continuation = await complete(model, context);
 ```typescript
 const response = await complete(model, context, {
   onPayload: (payload) => {
+    // 发送请求体前调用回调
     console.log('Provider payload:', JSON.stringify(payload, null, 2));
   }
 });
 ```
 
-回调支持 `stream`, `complete`, `streamSimple`, 和 `completeSimple`。
+请求发送前触发，可以查看完整的请求体内容，包括：
+- `model` - 模型 ID
+- `messages` - 消息数组
+- `tools` - 工具定义
+- `temperature` - 温度参数
+- `maxTokens` - 最大 token 数
+- 其他 Provider 特定选项
+
+`stream`, `complete`, `streamSimple`, 和 `completeSimple` **都支持** `onPayload` 回调作为选项参数。
 
 ## API、模型和 Provider
 

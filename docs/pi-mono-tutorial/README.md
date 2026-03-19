@@ -53,16 +53,31 @@
 - [17. pi-web-ui 设计：mini-lit 与 Tailwind v4](6_pi_web_ui/01-design.md) ✅
 - [18. Chat UI 与 Artifacts 实现](6_pi_web_ui/02-chat-artifacts.md) ✅
 
-### 篇章七：扩展与技能系统 :point_down:
-- [19. 扩展系统设计：Hooks 与插件机制](7_extension/01-extension-system.md) ✅
-- [20. 技能系统：Skill 注册与执行](7_extension/02-skill-system.md) ✅
+### 篇章七：pi - GPU Pod 管理 :point_down:
+- [0. 快速了解 pi](7_pods/00-README-zh.md)
+- [1. Pod 管理基础](7_pods/01-pod-management.md) ✅
+- [2. 模型部署与配置](7_pods/02-model-deployment.md)
+- [3. Agent 交互模式](7_pods/03-agent-interface.md)
 
-### 篇章八：学习心得 :point_down:
-- [21. 从源码中学到的设计模式](8_learn/01-design-patterns.md) ✅
-- [22. TypeScript 高级技巧实践](8_learn/02-typescript-tips.md) ✅
+### 篇章八：mom - Slack Bot :point_down:
+- [0. 快速了解 mom](8_mom/00-README-zh.md)
+- [1. mom 架构与核心概念](8_mom/01-architecture.md)
+- [2. Skill 系统](8_mom/02-skill-system.md)
+- [3. 事件系统](8_mom/03-events-system.md)
+- [4. 安全指南](8_mom/04-security-guide.md)
 
-### 篇章九：项目构建与发布 :point_down:
-- [23. 项目构建流程：从源码到发布的完整流转](9_building/01-building-workflow.md) ✅
+### 篇章九：coding-agent-extensions - 扩展系统 :point_down:
+- [1. Extension 事件系统](9_coding-agent-extensions/01-extension-events.md)
+- [2. Extension API 详解](9_coding-agent-extensions/02-extension-api.md)
+- [3. Skill 集成](9_coding-agent-extensions/03-skill-integration.md)
+
+---
+
+## 附录
+
+- [从源码中学到的设计模式](../guides/design-patterns.md)
+- [TypeScript 高级技巧实践](../guides/typescript-tips.md)
+- [项目构建流程](../internal/building-workflow.md)
 
 ## 有错误怎么办？
 
