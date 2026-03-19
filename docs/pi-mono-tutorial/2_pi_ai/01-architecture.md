@@ -34,6 +34,94 @@ if (provider === "openai") {
 
 pi-ai 的解决方案：**注册表模式 + 延迟加载 + 统一事件流协议**
 
+## LLM 提供商 API 差异详解
+
+要理解 pi-ai 的架构设计，首先需要了解它要统一的 API 到底有多大的差异。
+
+详见 [支持的 Provider 列表](#支持的-provider-列表详细版)。
+
+
+
+### 核心 API 差异对比
+
+下表展示了三大主流 Provider 的关键差异：
+
+| 维度 | OpenAI Completions | Anthropic Messages | Google Generative AI |
+|------|-------------------|-------------------|---------------------|
+| **端点** | `/v1/chat/completions` | `/v1/messages` | `/v1beta/models/{model}:streamGenerateContent` |
+| **认证方式** | `Authorization: Bearer {key}` | `x-api-key: {key}` 或 Bearer | `Authorization: Bearer {key}` |
+| **请求体结构** | `messages`, `model`, `stream` | `messages`, `model`, `stream` | `contents`, `model`, `generationConfig` |
+| **流式响应格式** | SSE `data: {...}` | SSE `event: content_block_start` 等 | 自定义分块流 (非标准 SSE) |
+| **消息角色** | `user`, `assistant`, `system/developer`, `tool` | `user`, `assistant` | `user`, `model` (内容含 parts) |
+| **工具调用字段** | `tool_calls[].function.{name,arguments}` | `tool_use.{id,name,input}` | `functionCall.{name,args,id}` |
+| **工具结果字段** | `tool` 角色 + `tool_call_id` | `tool_result.{tool_use_id,content}` | `functionResponse.{name,response}` |
+| **思考/推理** | `reasoning_content` / `reasoning` 字段 | `thinking` 块 (含 `signature`) | `thoughtSignature` 标记思考内容 |
+| **缓存控制** | `cache_control: {type:"ephemeral"}` | `cache_control: {type:"ephemeral",ttl:"1h"}` | 通过 `cachedContentTokenCount` 统计 |
+
+### 消息格式差异示例
+
+**OpenAI 格式：**
+```typescript
+{
+  role: "user" | "assistant" | "system" | "developer" | "tool",
+  content: string | {type:"text",text} | {type:"image_url",image_url:{url}}[],
+  tool_call_id?: string,  // tool 角色专用
+  tool_calls?: {id, type:"function", function:{name, arguments}}[]  // assistant 专用
+}
+```
+
+**Anthropic 格式：**
+```typescript
+{
+  role: "user" | "assistant",
+  content: string | {
+    type: "text" | "image" | "tool_use" | "tool_result" | "thinking" | "redacted_thinking",
+    text?: string,
+    source?: {type:"base64",media_type,data},
+    id?: string, name?: string, input?: object,  // tool_use
+    tool_use_id?: string, content?: ..., is_error?: boolean  // tool_result
+    signature?: string  // thinking
+  }[]
+}
+```
+
+**Google 格式：**
+```typescript
+{
+  role: "user" | "model",
+  parts: {
+    text?: string,
+    inlineData?: {mimeType, data},  // 图片
+    functionCall?: {name, args, id},
+    functionResponse?: {name, response}
+  }[]
+}
+```
+
+### 流式事件差异
+
+| Provider | 传输协议 | 关键事件 |
+|---------|---------|---------|
+| **OpenAI** | SSE | `data: {"choices":[{"delta":{content/tool_calls}}]}` |
+| **Anthropic** | SSE | `content_block_start`, `content_block_delta`, `message_delta` |
+| **Google** | 自定义流 | `GenerateContentResponse` 含 `candidates[].content.parts[]` |
+
+### 统一接口设计的核心挑战
+
+1. **消息角色映射** - 不同 Provider 的角色系统不同（如 Anthropic 没有 system 角色）
+2. **内容块结构** - 文本/图片/工具/思考的组织方式差异巨大
+3. **流式协议** - SSE vs 自定义流，事件命名和结构不同
+4. **工具调用** - ID 生成、参数字段命名、结果回传格式不同
+5. **推理/思考** - 有些在单独字段，有些在内容块中
+6. **缓存机制** - 各家的缓存控制方式不同（ephemeral、token 计数等）
+7. **错误处理** - 错误码和错误信息格式不同
+
+正是这些巨大的差异，使得 pi-ai 的架构设计显得尤为精妙。
+
+> **深入阅读**：
+> - [第 5 章：消息格式转换](./05-message-transform.md) - 消息格式统一与 Provider 适配
+> - [第 6 章：错误处理](./06-error-handling.md) - 错误码和错误信息格式统一
+
 ## 架构全景
 
 ```
@@ -81,9 +169,131 @@ pi-ai 的解决方案：**注册表模式 + 延迟加载 + 统一事件流协议
 
 ## 四层架构详解
 
+### 架构分层对比表
+
+| 层级 | 名称 | 职责 | 关键组件 | 深入阅读 |
+|------|------|------|----------|---------|
+| 第 1 层 | 统一入口层 | 提供流式/非流式、完整/简化四种调用方式 | `stream()`, `streamSimple()`, `complete()`, `completeSimple()` | 本章 |
+| 第 2 层 | 注册表层 | 运行时分发请求到对应 Provider，带类型检查 | `registerApiProvider()`, `getApiProvider()` | [第 3 章](./03-provider-registry.md) |
+| 第 3 层 | Provider 层 | 实现各 LLM 提供商的 API 调用逻辑（延迟加载） | OpenAI Completions, Anthropic Messages, Google GenerativeAI | [第 3 章](./03-provider-registry.md) |
+| 第 4 层 | 事件流层 | 统一事件协议，支持双向流控制 | `EventStream`, `AssistantMessageEvent` | [第 4 章](./04-streaming-events.md) |
+
+### 架构数据流图
+
+```mermaid
+flowchart TB
+    subgraph L1["第 1 层：统一入口层"]
+        A["stream() / streamSimple()
+complete() / completeSimple()"]
+    end
+
+    subgraph L2["第 2 层：注册表层"]
+        B["getApiProvider(api)
+         Map<api, ApiProvider>"]
+    end
+
+    subgraph L3["第 3 层：Provider 层"]
+        C1["OpenAI
+Completions"]
+        C2["Anthropic
+Messages"]
+        C3["Google
+GenerativeAI"]
+        C4["...其他 17+"]
+    end
+
+    subgraph L4["第 4 层：事件流层"]
+        D["EventStream
+push() / end() / result()
+[Symbol.asyncIterator]()"]
+    end
+
+    L1 -->|1. 解析 api 参数 | L2
+    L2 -->|2. 路由分发 | L3
+    L3 -->|3. 调用原始 API| L4
+    L4 -->|4. 返回统一事件流 | L1
+```
+
+### 完整调用流程示例
+
+```typescript
+// 用户代码
+const model = getModel("anthropic", "claude-sonnet-4-20250514");
+const stream = streamSimple(model, context, { temperature: 0.7 });
+
+// 内部流程：
+// 1. streamSimple -> 查注册表获取 anthropic-messages Provider
+// 2. 延迟加载 @mariozechner/pi-ai/anthropic-messages（如果尚未加载）
+// 3. 调用 Anthropic Messages API
+// 4. Anthropic 流式响应 -> 转换为统一 AssistantMessageEvent
+// 5. 通过 EventStream 返回给调用者
+```
+
+---
+
 ### 第 1 层：统一入口层
 
-pi-ai 提供四个入口函数，满足不同场景：
+pi-ai 提供**四个入口函数**，通过两个维度满足不同场景需求：
+
+| 维度 | 选项 A | 选项 B |
+|------|--------|--------|
+| **响应方式** | `stream*()` - 流式处理，实时响应 | `complete*()` - 非流式，等待完整响应 |
+| **接口类型** | `*Simple` - 统一接口，跨 Provider 兼容 | 无后缀 - 完整控制，支持 Provider 特定功能 |
+
+#### 四个函数快速参考
+
+| 函数 | 返回类型 | 使用场景 |
+|------|---------|---------|
+| `stream()` | `AssistantMessageEventStream` | 流式 + 需要 Provider 特定功能（如 `reasoningEffort`） |
+| `streamSimple()` | `AssistantMessageEventStream` | 流式 + 跨 Provider 兼容（推荐） |
+| `complete()` | `Promise<AssistantMessage>` | 非流式 + 需要 Provider 特定功能 |
+| `completeSimple()` | `Promise<AssistantMessage>` | 非流式 + 跨 Provider 兼容（推荐） |
+
+
+#### 核心区别 1：流式 vs 非流式
+
+```typescript
+// stream - 流式处理，实时响应
+const s = stream(model, context);
+for await (const event of s) {
+  if (event.type === "text_delta") {
+    process.stdout.write(event.delta); // 边生成边显示
+  }
+}
+await s.result(); // 可选：获取最终结果
+
+// complete - 非流式，一次性获取完整响应
+const message = await complete(model, context);
+console.log(message.content); // 等待完成后一次性输出
+```
+
+#### 核心区别 2：完整版 vs 简化版
+
+```typescript
+// 无后缀版本：完全控制，使用 Provider 特定选项
+import { stream } from "@mariozechner/pi-ai";
+const s = stream(model, context, {
+  temperature: 0.7,
+  reasoningEffort: "high",  // OpenAI 特有参数
+  store: true,              // OpenAI 特有参数
+});
+
+// Simple 版本：统一接口，自动映射通用概念
+import { streamSimple } from "@mariozechner/pi-ai";
+const s = streamSimple(model, context, {
+  temperature: 0.7,
+  reasoning: "high",  // 自动映射到各 Provider 的推理参数
+});
+```
+
+#### 选型建议
+
+| 需求 | 推荐函数 |
+|------|---------|
+| 实时显示文本 / 跨 Provider 兼容 | `streamSimple()` |
+| 实时显示文本 / 需要特定功能 | `stream()` |
+| 一次性获取 / 跨 Provider 兼容 | `completeSimple()` |
+| 一次性获取 / 需要特定功能 | `complete()` |
 
 ```typescript
 // packages/ai/src/stream.ts
@@ -117,88 +327,135 @@ export async function completeSimple<TApi extends Api>(
 ): Promise<AssistantMessage>;
 ```
 
-**为什么需要两个版本？**
+#### 核心组件：底层 stream() 函数
+
+在四个入口函数之下，还有一个底层的 `stream()` 函数，它是整个架构的核心：
 
 ```typescript
-// stream(): 完全控制，使用 provider 特定选项
-import { streamOpenAICompletions } from "@mariozechner/pi-ai";
-const s = streamOpenAICompletions(model, context, {
-  reasoningEffort: "high",  // OpenAI 特定选项
-  store: true,              // OpenAI 特定选项
-});
+// packages/ai/src/stream.ts
+export async function* stream(
+  api: Api,                     // API 标识，如 "openai/gpt-4o"
+  options: StreamOptions        // 统一选项
+): AsyncGenerator<AgentMessageEvent> {
+  // 1. 解析 API 标识
+  const [providerName, modelId] = api.split("/");
 
-// streamSimple(): 统一接口，自动映射通用概念
-import { streamSimple } from "@mariozechner/pi-ai";
-const s = streamSimple(model, context, {
-  reasoning: "high",  // 自动映射到各 provider 的推理选项
-});
+  // 2. 获取 Provider
+  const provider = getApiProvider(providerName);
+
+  // 3. 调用 Provider 的 stream 方法
+  const stream = await provider.stream(modelId, options);
+  // 如 packages/ai/src/providers/openai-completions.ts
+  // 详见 streamOpenAICompletions
+
+  // 4. 标准化事件流 AgentMessageEvent
+  for await (const event of stream) {
+    yield normalizeEvent(event);
+  }
+}
 ```
 
-### 第 2 层：注册表层
+**关键设计：**
+- `Api` 类型使用 `provider/model` 格式，如 `"openai/gpt-4o"`
+- 统一的 `StreamOptions` 接口，屏蔽底层差异
+- 返回统一的 `AgentMessageEvent` 事件流，统一事件协议，如 将 OpenAI 的 `ChatCompletionChunk` 转换为 `AssistantMessageEvent`
+
+### 第 2 层：注册表层——架构的"调度中枢"
+
+注册表层是 pi-ai 架构的**核心调度中枢**，负责将上层请求路由到下层对应的 Provider 实现。
+
+#### 核心职责
+
+注册表层解决的核心问题：**如何根据 `model.api` 找到对应的 Provider 实现？**
 
 ```typescript
 // packages/ai/src/api-registry.ts
+// 简化的注册表逻辑
+const apiProviderRegistry = new Map<string, ApiProvider>();
 
-export interface ApiProvider<TApi extends Api = Api, TOptions extends StreamOptions = StreamOptions> {
-  api: TApi;
-  stream: StreamFunction<TApi, TOptions>;
-  streamSimple: StreamFunction<TApi, SimpleStreamOptions>;
-}
-
-// 内部使用 Map 存储
-const apiProviderRegistry = new Map<string, RegisteredApiProvider>();
-
-export function registerApiProvider<TApi extends Api, TOptions extends StreamOptions>(
-  provider: ApiProvider<TApi, TOptions>,
-  sourceId?: string,
-): void {
-  apiProviderRegistry.set(provider.api, {
-    provider: {
-      api: provider.api,
-      stream: wrapStream(provider.api, provider.stream),
-      streamSimple: wrapStreamSimple(provider.api, provider.streamSimple),
-    },
-    sourceId,
-  });
-}
-
-export function getApiProvider(api: Api): ApiProviderInternal | undefined {
-  return apiProviderRegistry.get(api)?.provider;
+// 运行时查找 Provider
+function getApiProvider(api: Api): ApiProvider | undefined {
+  return apiProviderRegistry.get(api);
 }
 ```
 
-**关键设计：运行时类型检查**
+**为什么用 Map 而不是 if-else？**
+
+| 设计方案 | 扩展性 | 代码复杂度 | 可测试性 |
+|---------|--------|-----------|---------|
+| if-else | 每新增 Provider 需修改逻辑 | O(n) 分支判断 | 难以单独测试 |
+| Map 注册表 | 只需注册，调用逻辑不变 | O(1) 查找 | 每个 Provider 可独立测试 |
+
+#### 架构设计思想
+
+注册表层体现了**开闭原则**（Open-Closed Principle）：
+- **对扩展开放**：新增 Provider 只需调用 `registerApiProvider()`，无需修改现有代码
+- **对修改关闭**：调用逻辑 `stream()` / `streamSimple()` 保持不变
 
 ```typescript
-function wrapStream<TApi extends Api, TOptions extends StreamOptions>(
+// 用户视角：完全感知不到注册表的存在
+const model = getModel("anthropic", "claude-sonnet-4-20250514");
+const stream = streamSimple(model, context);
+// 内部自动完成：model.api -> 查找注册表 -> 调用对应 Provider
+```
+
+#### 与上下层的关系
+
+```
+第 1 层 (统一入口)         第 2 层 (注册表)          第 3 层 (Provider)
+     stream()       ->   getApiProvider()   ->   streamOpenAICompletions()
+     streamSimple() ->   getApiProvider()   ->   streamSimpleAnthropic()
+```
+
+> **深入阅读**：详见 [第 3 章：Provider 注册与延迟加载](./03-provider-registry.md)，了解注册表的完整实现、延迟加载机制和运行时类型检查。
+
+---
+
+#### 关键设计：运行时类型检查
+
+注册表在返回 Provider 时，会用 `wrapStream` 包装一层，进行运行时类型检查：
+
+```typescript
+function wrapStream<TApi extends Api>(
   api: TApi,
-  stream: StreamFunction<TApi, TOptions>,
+  stream: StreamFunction<TApi>,
 ): ApiStreamFunction {
   return (model, context, options) => {
-    // 运行时检查：确保 model.api 与 provider.api 匹配
     if (model.api !== api) {
       throw new Error(`Mismatched api: ${model.api} expected ${api}`);
     }
-    return stream(model as Model<TApi>, context, options as TOptions);
+    return stream(model, context, options);
   };
 }
 ```
 
+**双重类型保护**：
+1. **编译时**：TypeScript 泛型约束确保类型正确
+2. **运行时**：`wrapStream` 进行二次校验，防止类型擦除导致的问题
+
+这确保了即使用户错误地混用 `api` 类型，也能在运行时及时报错，而不是静默失败。
+
 ### 第 3 层：Provider 实现层（延迟加载）
+
+pi-ai 支持 20+ Provider，但如果一次性导入所有 Provider 的代码，会导致：
+- **包体积过大**：未使用的 Provider 代码也被打包
+- **启动速度慢**：浏览器需要解析大量无用代码
+- **环境污染**：Node-only 的 Provider（如 Bedrock）可能污染浏览器环境
+
+**解决方案：延迟加载**
 
 这是 pi-ai 最精妙的设计之一。不是静态导入所有 Provider，而是**按需加载**：
 
 ```typescript
 // packages/ai/src/providers/register-builtins.ts
 
-// 延迟加载包装器
-function createLazyStream<TApi extends Api, TOptions extends StreamOptions>(
-  loadModule: () => Promise<LazyProviderModule<TApi, TOptions, SimpleStreamOptions>>,
-): StreamFunction<TApi, TOptions> {
+// 延迟加载包装器的简化逻辑
+function createLazyStream(loadModule: () => Promise<ProviderModule>) {
   return (model, context, options) => {
     // 立即返回一个 EventStream，但内部异步加载实际 Provider
     const outer = new AssistantMessageEventStream();
 
+    // 异步加载实际 Provider 模块
     loadModule()
       .then((module) => {
         const inner = module.stream(model, context, options);
@@ -206,12 +463,11 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions>(
       })
       .catch((error) => {
         // 加载失败时发送 error 事件，而不是抛出异常
-        const message = createLazyLoadErrorMessage(model, error);
-        outer.push({ type: "error", reason: "error", error: message });
-        outer.end(message);
+        outer.push({ type: "error", error });
+        outer.end();
       });
 
-    return outer;
+    return outer;  // 立即返回 EventStream
   };
 }
 
@@ -230,15 +486,107 @@ function loadOpenAICompletionsProviderModule() {
 export const streamOpenAICompletions = createLazyStream(loadOpenAICompletionsProviderModule);
 ```
 
-**延迟加载的好处：**
-1. **减小包体积**：只加载实际使用的 Provider
-2. **加快启动速度**：避免初始化时加载所有依赖
-3. **环境隔离**：Bedrock（Node-only）不会污染浏览器构建
-4. **错误隔离**：某个 Provider 加载失败不影响其他 Provider
+**延迟加载的核心设计**：
+1. **Promise 缓存**：`import()` 只执行一次，后续调用复用已加载的模块
+2. **事件流转发**：`forwardStream(outer, inner)` 将内部流事件转发到外部流
+3. **错误隔离**：Provider 加载失败不影响其他 Provider
+
+```
+延迟加载流程：
+1. streamSimple() -> createLazyStream() -> 立即返回 outer EventStream
+2. outer 内部异步调用 import("./openai-completions.js")
+3. 模块加载完成 -> 调用 streamOpenAICompletions() -> 返回 inner EventStream
+4. forwardStream(outer, inner) -> inner 的事件转发到 outer
+5. 用户通过 outer 接收事件
+```
+
+> **深入阅读**：详见 [第 3 章：Provider 注册与延迟加载](./03-provider-registry.md)，了解 outer/inner 流的关系、Promise 缓存实现和完整时序图。
+
+---
 
 ### 第 4 层：统一事件流协议
 
-pi-ai 将所有 Provider 的响应转换为统一的事件流：
+pi-ai 将所有 Provider 的响应转换为统一的事件流协议，核心是 `EventStream` 类。
+
+#### EventStream 类：双向流控制
+
+传统的 `AsyncGenerator` 只能消费，不能控制。`EventStream` 提供**双向控制**：
+
+```typescript
+// packages/ai/src/utils/event-stream.ts
+// EventStream 简化版
+class EventStream<T, R = T> {
+  private queue: T[] = [];
+  private waiting: ((value: IteratorResult<T>) => void)[] = [];
+  private done = false;
+  private finalResultPromise: Promise<R>;
+
+  // 生产者：推送事件
+  push(event: T): void {
+    if (this.done) return;
+
+    const waiter = this.waiting.shift();
+    if (waiter) {
+      waiter({ value: event, done: false });  // 零拷贝传递
+    } else {
+      this.queue.push(event);  // 入队等待消费
+    }
+  }
+
+  // 生产者：结束流
+  end(result?: R): void {
+    this.done = true;
+    // ... 通知所有等待者
+  }
+
+  // 消费者：异步迭代
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (true) {
+      if (this.queue.length > 0) {
+        yield this.queue.shift()!;
+      } else if (this.done) {
+        return;
+      } else {
+        // 等待新事件
+        const result = await new Promise((resolve) => this.waiting.push(resolve));
+        if (result.done) return;
+        yield result.value;
+      }
+    }
+  }
+
+  // 消费者：获取最终结果
+  result(): Promise<R> {
+    return this.finalResultPromise;
+  }
+}
+```
+
+**核心设计**：
+- **队列 + 等待列表**：消费者快时队列为空，生产者快时队列缓冲
+- **零拷贝传递**：消费者等待时，事件直接传递，不经过队列
+- **背压处理**：队列自然缓冲，避免内存无限增长
+
+#### 两种消费方式
+
+```typescript
+const stream = streamSimple(model, context);
+
+// 方式 1：实时处理事件（打字机效果）
+for await (const event of stream) {
+  if (event.type === "text_delta") {
+    process.stdout.write(event.delta);
+  }
+}
+
+// 方式 2：直接获取最终结果（内部仍然流式处理）
+const message = await stream.result();
+console.log(message.content);
+```
+
+#### 统一事件类型
+
+事件流标准化
 
 ```typescript
 // packages/ai/src/types.ts
@@ -258,95 +606,57 @@ export type AssistantMessageEvent =
   | { type: "error"; reason: "error" | "aborted"; error: AssistantMessage };
 ```
 
-**EventStream 类：双向流控制**
+不管底层是 OpenAI 的 `data: {"choices":[{"delta":{content}}]}` 还是 Anthropic 的 `content_block_delta`，最终都被转换为统一的 `AssistantMessageEvent`。
 
-```typescript
-// packages/ai/src/utils/event-stream.ts
+> **深入阅读**：详见 [第 4 章：流式事件处理](./04-streaming-events.md)，了解 EventStream 的内部机制、5 种使用模式、背压控制和性能优化。
+### 消息格式转换
 
-export class EventStream<T, R = T> implements AsyncIterable<T> {
-  private queue: T[] = [];
-  private waiting: ((value: IteratorResult<T>) => void)[] = [];
-  private done = false;
-  private finalResultPromise: Promise<R>;
-  private resolveFinalResult!: (result: R) => void;
+不同 Provider 的消息格式差异很大，pi-ai 通过转换函数实现统一：
 
-  // 生产者：推送事件
-  push(event: T): void {
-    if (this.done) return;
-    // ... 处理完成事件，通知等待者
-  }
+- OpenAI 格式转换
+  - `convertFromOpenAI` OpenAI -> 统一格式
+  - `convertToOpenAI` 统一格式 -> OpenAI
+- Anthropic 格式转换
+  - `convertToAnthropic`
 
-  // 生产者：结束流
-  end(result?: R): void {
-    this.done = true;
-    // ... 通知所有等待者
-  }
+详见 [第 5 章](./05-message-transform.md) | 消息格式转换
 
-  // 消费者：异步迭代
-  async *[Symbol.asyncIterator](): AsyncIterator<T> {
-    while (true) {
-      if (this.queue.length > 0) {
-        yield this.queue.shift()!;
-      } else if (this.done) {
-        return;
-      } else {
-        // 等待新事件
-        const result = await new Promise<IteratorResult<T>>(
-          (resolve) => this.waiting.push(resolve)
-        );
-        if (result.done) return;
-        yield result.value;
-      }
-    }
-  }
 
-  // 消费者：获取最终结果
-  result(): Promise<R> {
-    return this.finalResultPromise;
-  }
-}
-```
+## 支持的 Provider 列表（详细版）
 
-**为什么需要 `result()`？**
+pi-ai 目前支持 20+ Provider，按 API 类型分组的完整列表：
 
-```typescript
-const s = stream(model, context);
+| API 类型 | Provider | 代表模型/特点 |
+|---------|----------|---------|
+| `openai-completions` | OpenAI, xAI, Groq, Cerebras, OpenRouter, Z.ai, Minimax, HuggingFace | GPT-4o/4.1, Grok-3/4, Llama 系列，Qwen 系列 |
+| `openai-responses` | OpenAI | o1, o3, o4-mini (推理系列，使用 Responses API) |
+| `openai-codex-responses` | OpenAI Codex | ChatGPT Plus/Pro 内置的 Claude Code |
+| `azure-openai-responses` | Azure OpenAI | 企业级 OpenAI 服务，Azure 部署 |
+| `anthropic-messages` | Anthropic, GitHub Copilot | Claude 3/4 系列，支持 thinking/reasoning |
+| `google-generative-ai` | Google | Gemini 2.0/2.5/3.0 系列 |
+| `google-vertex` | Vertex AI | 企业版 Gemini，Google Cloud 部署 |
+| `google-gemini-cli` | Gemini CLI | Cloud Code Assist，VS Code 集成 |
+| `mistral-conversations` | Mistral | Mistral Large/Nemo，开源模型 |
+| `bedrock-converse-stream` | Amazon Bedrock | AWS 企业级，多模型统一接入 |
 
-// 方式 1：实时处理事件
-for await (const event of s) {
-  if (event.type === "text_delta") {
-    process.stdout.write(event.delta);
-  }
-}
+> **注意**：pi-ai 将 Provider 按 API 兼容性分组，相同 API 类型的 Provider 可以无缝切换。例如 `openai-completions` 类型包括 OpenAI、xAI、Groq、Cerebras 等，它们的调用方式完全相同。
 
-// 方式 2：直接获取最终结果（内部仍然流式处理）
-const message = await s.result();
-console.log(message.content);
-```
+以下为最常见的两个
 
-## 支持的 Provider 列表
-
-pi-ai 目前支持 20+ Provider，按 API 类型分组：
-
-| API 类型 | Provider | 特点 |
-|---------|----------|------|
-| `openai-completions` | OpenAI, xAI, Groq, Cerebras, OpenRouter, ... | OpenAI 兼容 API |
-| `openai-responses` | OpenAI | OpenAI Responses API |
-| `openai-codex-responses` | OpenAI Codex | ChatGPT Plus/Pro |
-| `azure-openai-responses` | Azure OpenAI | 企业级 OpenAI |
-| `anthropic-messages` | Anthropic | Claude 系列 |
-| `google-generative-ai` | Google | Gemini API |
-| `google-vertex` | Vertex AI | Google Cloud |
-| `google-gemini-cli` | Gemini CLI | Cloud Code Assist |
-| `mistral-conversations` | Mistral | 开源模型 |
-| `bedrock-converse-stream` | Amazon Bedrock | AWS 企业级 |
+- OpenAI 兼容接口:
+  - 对应 `openai-completions`
+  - 使用 OpenAI 风格的 `/v1/chat/completions` 端点
+- Anthropic 兼容接口:
+  - 对应 `anthropic-messages`
+  - 使用 Anthropic 风格的 `/v1/messages`
+  端点。
 
 ## 使用示例
 
 ### 基础使用
 
 ```typescript
-import { getModel, streamSimple, completeSimple } from "@mariozechner/pi-ai";
+import { getModel, streamSimple } from "@mariozechner/pi-ai";
 
 // 获取模型（带类型推断）
 const model = getModel("openai", "gpt-4o-mini");
@@ -361,9 +671,6 @@ for await (const event of stream) {
     process.stdout.write(event.delta);
   }
 }
-
-// 获取完整响应
-const message = await stream.result();
 ```
 
 ### 跨 Provider 切换
@@ -381,408 +688,52 @@ const claudeResponse = await completeSimple(claude, context);
 context.messages.push(claudeResponse);
 
 // 再切换到 GPT（上下文自动转换）
-const gpt = getModel("openai", "gpt-4o");
 context.messages.push({ role: "user", content: "Give me an example" });
+const gpt = getModel("openai", "gpt-4o");
 const gptResponse = await completeSimple(gpt, context);
 ```
 
+> **更多示例**：详见 [00-README-zh.md](./00-README-zh.md) 的完整 API 文档和 [第 4 章：流式事件处理](./04-streaming-events.md) 的 5 种使用模式。
+
 ## 架构优势总结
 
-1. **统一接口**：四个入口函数覆盖所有使用场景
-2. **延迟加载**：按需加载 Provider，减小包体积
-3. **类型安全**：TypeScript 泛型确保编译时类型正确
-4. **运行时检查**：双重保护防止 API 不匹配
-5. **错误隔离**：Provider 加载失败不影响整体应用
-6. **事件驱动**：统一的事件协议支持复杂交互模式
-7. **跨 Provider**：Context 可序列化，支持无缝切换
+面对上述 API 差异，pi-ai 的架构设计提供了以下优势：
+
+1. **统一接口** - 无论底层是哪个 Provider，调用方式都一样
+2. **延迟加载** - 按需加载 Provider，减小包体积，加快启动速度
+3. **类型安全** - TypeScript 泛型确保编译时类型正确，运行时还有双重检查
+4. **错误隔离** - 某个 Provider 加载失败不影响其他 Provider 的正常使用
+5. **事件驱动** - 统一的 `AssistantMessageEvent` 协议支持复杂交互模式
+6. **跨 Provider 切换** - Context 可序列化，支持在对话中无缝切换不同 Provider
+7. **易于扩展** - 添加新 Provider 只需实现统一的 `ApiProvider` 接口并注册
+8. **环境隔离** - Node-only 的 Provider（如 Bedrock）不会污染浏览器构建
+
+## 总结
+
+pi-ai 通过**适配器模式** + **注册表模式** + **延迟加载**，优雅地解决了多 Provider 统一接入的问题：
+
+| 挑战 | pi-ai 解决方案 |
+|------|--------------|
+| 消息格式差异 | 统一 `Message` 类型 + 各 Provider 的 `convertMessages()` 转换函数 |
+| 流式协议差异 | 统一 `AssistantMessageEvent` + 各 Provider 的流解析逻辑 |
+| 工具调用差异 | 统一 `ToolCall` 类型 + ID 规范化处理 |
+| 认证方式差异 | 统一的 `apiKey` 参数 + Provider 内部处理 |
+| 包体积问题 | 延迟加载 (`import()`) + 按需初始化 |
+
+这种设计让开发者无需关心底层差异，一套代码支持 20+ LLM 提供商，同时保持了优秀的开发体验和运行时性能。
+
+## 本文深入阅读
+
+本文是架构全景概览，详细的实现细节请参阅以下章节：
+
+| 章节 | 主题 | 内容 |
+|------|------|------|
+| [第 3 章](./03-provider-registry.md) | Provider 注册与延迟加载 | 注册表实现、Promise 缓存、outer/inner 流转发 |
+| [第 4 章](./04-streaming-events.md) | 流式事件处理 | EventStream 双向流控制、5 种使用模式、背压优化 |
+| [第 5 章](./05-message-transform.md) | 消息格式转换 | 统一协议与 Provider 适配 |
+| [第 6 章](./06-error-handling.md) | 错误处理 | 错误码和错误信息格式统一 |
+| [00-README-zh.md](./00-README-zh.md) | 完整 API 参考 | 所有 Provider 列表、API 文档 |
 
 ## 下篇预告
 
 《类型系统深度解析：Message、Content、Event 协议》 - 深入理解 pi-ai 的核心类型设计。
-
-```mermaid
-flowchart TB
-    subgraph A["统一接口层"]
-        S["stream()"]
-        SS["streamSimple()"]
-    end
-
-    subgraph B["类型系统层"]
-        M[Message]
-        C[Content]
-        E[Event]
-    end
-
-    subgraph C["Provider 层"]
-        OP[OpenAI Provider]
-        AP[Anthropic Provider]
-        GP[Google Provider]
-        MP["... 其他 17+"]
-    end
-
-    subgraph D["原始 API 层"]
-        OA[OpenAI API]
-        AA[Anthropic API]
-        GA[Google API]
-        MA["... 其他 API"]
-    end
-
-    S --> M
-    SS --> M
-    M --> C
-    C --> E
-    E --> OP
-    E --> AP
-    E --> GP
-    E --> MP
-    OP --> OA
-    AP --> AA
-    GP --> GA
-    MP --> MA
-```
-
-## 核心架构组件
-
-### 1. 统一入口 - stream() 函数
-
-```typescript
-// packages/ai/src/stream.ts
-export async function* stream(
-  api: Api,                    // API 标识，如 "openai/gpt-4o"
-  options: StreamOptions        // 统一选项
-): AsyncGenerator<AgentMessageEvent> {
-  // 1. 解析 API 标识
-  const [providerName, modelId] = api.split("/");
-
-  // 2. 获取 Provider
-  const provider = getApiProvider(providerName);
-
-  // 3. 调用 Provider 的 stream 方法
-  const stream = await provider.stream(modelId, options);
-
-  // 4. 标准化事件流
-  for await (const event of stream) {
-    yield normalizeEvent(event);
-  }
-}
-```
-
-**关键设计：**
-- `Api` 类型使用 `provider/model` 格式，如 `"openai/gpt-4o"`
-- 统一的 `StreamOptions` 接口，屏蔽底层差异
-- 返回统一的 `AgentMessageEvent` 事件流
-
-### 2. 类型系统 - 统一协议
-
-pi-ai 定义了一套统一的类型系统，所有 Provider 都要遵循：
-
-```typescript
-// packages/ai/src/types.ts
-
-// 消息类型
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
-
-export interface UserMessage {
-  role: "user";
-  content: Content[];
-}
-
-export interface AssistantMessage {
-  role: "assistant";
-  content: Content[];
-}
-
-// 内容类型
-export type Content = TextContent | ImageContent | ToolCall | ToolResult;
-
-export interface TextContent {
-  type: "text";
-  text: string;
-}
-
-export interface ImageContent {
-  type: "image";
-  source: "base64" | "url";
-  data: string;
-}
-
-export interface ToolCall {
-  type: "tool_call";
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
-```
-
-**设计要点：**
-- 使用 TypeScript 联合类型（Union Types）表达多态
-- 每个类型都有 `type` 字段用于类型收窄
-- 统一的命名规范（camelCase）
-
-### 3. Provider 接口
-
-每个 Provider 都要实现统一的接口：
-
-```typescript
-// packages/ai/src/api-registry.ts
-export interface ApiProvider {
-  name: string;
-  stream: (
-    model: string,
-    options: StreamOptions
-  ) => Promise<AsyncGenerator<AgentMessageEvent>>;
-  getModels: () => Promise<Model[]>;
-}
-
-// Provider 注册
-const providers = new Map<string, ApiProvider>();
-
-export function registerApiProvider(provider: ApiProvider): void {
-  providers.set(provider.name, provider);
-}
-
-export function getApiProvider(name: string): ApiProvider {
-  const provider = providers.get(name);
-  if (!provider) {
-    throw new Error(`Unknown provider: ${name}`);
-  }
-  return provider;
-}
-```
-
-### 4. Provider 实现示例
-
-以 OpenAI Provider 为例：
-
-```typescript
-// packages/ai/src/providers/openai.ts
-export const openaiProvider: ApiProvider = {
-  name: "openai",
-
-  async stream(model: string, options: StreamOptions) {
-    // 1. 转换消息格式
-    const openaiMessages = options.messages.map(convertToOpenAIFormat);
-
-    // 2. 调用 OpenAI API
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${options.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: openaiMessages,
-        stream: true,
-        tools: options.tools?.map(convertToolToOpenAIFormat),
-      }),
-    });
-
-    // 3. 解析流式响应并转换为统一事件
-    return parseOpenAIStream(response);
-  },
-
-  async getModels() {
-    // 获取可用模型列表
-    return [...];
-  }
-};
-
-// 注册 Provider
-registerApiProvider(openaiProvider);
-```
-
-## 消息格式转换
-
-不同 Provider 的消息格式差异很大，pi-ai 通过转换函数解决：
-
-### OpenAI 格式转换
-
-```typescript
-// OpenAI -> 统一格式
-function convertFromOpenAI(message: OpenAI.Message): Message {
-  return {
-    role: message.role === "assistant" ? "assistant" : "user",
-    content: message.content.map(c => {
-      if (c.type === "text") {
-        return { type: "text", text: c.text };
-      }
-      if (c.type === "image_url") {
-        return { type: "image", source: "url", data: c.image_url.url };
-      }
-      // ...
-    }),
-  };
-}
-
-// 统一格式 -> OpenAI
-function convertToOpenAI(message: Message): OpenAI.Message {
-  return {
-    role: message.role,
-    content: message.content.map(c => {
-      if (c.type === "text") {
-        return { type: "text", text: c.text };
-      }
-      // ...
-    }),
-  };
-}
-```
-
-### Anthropic 格式转换
-
-```typescript
-// Anthropic 的消息格式完全不同
-function convertToAnthropic(messages: Message[]): Anthropic.Message[] {
-  return messages.map(m => ({
-    role: m.role,
-    content: m.content.map(c => {
-      if (c.type === "text") {
-        return { type: "text", text: c.text };
-      }
-      if (c.type === "image") {
-        return {
-          type: "image",
-          source: {
-            type: "base64",
-            media_type: "image/png",
-            data: c.data,
-          },
-        };
-      }
-      // ...
-    }),
-  }));
-}
-```
-
-## 事件流标准化
-
-流式响应的事件格式也各不相同，pi-ai 统一为 `AgentMessageEvent`：
-
-```typescript
-// 统一事件类型
-export type AgentMessageEvent =
-  | { type: "start" }
-  | { type: "text_start" }
-  | { type: "text_delta"; data: string }
-  | { type: "text_end" }
-  | { type: "thinking_start" }
-  | { type: "thinking_delta"; data: string }
-  | { type: "thinking_end" }
-  | { type: "toolcall_start"; id: string; name: string }
-  | { type: "toolcall_delta"; id: string; arguments: string }
-  | { type: "toolcall_end"; id: string }
-  | { type: "done"; usage?: Usage }
-  | { type: "error"; error: Error };
-```
-
-**OpenAI 流解析：**
-
-```typescript
-async function* parseOpenAIStream(response: Response) {
-  const reader = response.body?.getReader();
-
-  yield { type: "start" };
-  yield { type: "text_start" };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    // OpenAI 的流格式：data: {...}\n\ndata: {...}
-    const lines = new TextDecoder().decode(value).split("\n");
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = JSON.parse(line.slice(6));
-        const delta = data.choices[0]?.delta;
-
-        if (delta.content) {
-          yield { type: "text_delta", data: delta.content };
-        }
-
-        if (delta.tool_calls) {
-          // 处理工具调用
-          yield { type: "toolcall_start", ... };
-        }
-      }
-    }
-  }
-
-  yield { type: "text_end" };
-  yield { type: "done" };
-}
-```
-
-## 支持的 Provider 列表
-
-pi-ai 目前支持 20+ Provider：
-
-| Provider | API 前缀 | 特点 |
-|---------|---------|------|
-| OpenAI | `openai/` | 工具调用、图像、流式 |
-| Anthropic | `anthropic/` | 思考/推理、工具调用 |
-| Google | `google/` | Gemini 系列 |
-| Mistral | `mistral/` | 开源模型 |
-| Groq | `groq/` | 高速推理 |
-| xAI | `xai/` | Grok 模型 |
-| Azure | `azure/` | OpenAI 企业版 |
-| AWS Bedrock | `bedrock/` | 企业级部署 |
-| OpenRouter | `openrouter/` | 统一接入多提供商 |
-| ... | ... | 还有更多 |
-
-## 使用示例
-
-```typescript
-import { stream } from "@mariozechner/pi-ai";
-
-// 使用 OpenAI
-const openaiStream = stream("openai/gpt-4o", {
-  messages: [{ role: "user", content: [{ type: "text", text: "Hello!" }] }],
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-// 使用 Anthropic，代码完全一样！
-const anthropicStream = stream("anthropic/claude-3-5-sonnet-20241022", {
-  messages: [{ role: "user", content: [{ type: "text", text: "Hello!" }] }],
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
-// 遍历事件流
-for await (const event of openaiStream) {
-  switch (event.type) {
-    case "text_delta":
-      process.stdout.write(event.data);
-      break;
-    case "toolcall_start":
-      console.log(`Tool call: ${event.name}`);
-      break;
-    case "done":
-      console.log("\nDone!");
-      break;
-  }
-}
-```
-
-## 架构优势
-
-1. **统一接口** - 无论底层是哪个 Provider，调用方式都一样
-2. **易于扩展** - 添加新 Provider 只需实现 ApiProvider 接口
-3. **类型安全** - TypeScript 类型系统保证代码正确性
-4. **事件驱动** - 统一的 AgentMessageEvent 协议便于处理流式响应
-5. **跨 Provider 切换** - 可以在对话中无缝切换不同 Provider
-
-## 总结
-
-pi-ai 通过**适配器模式** + **注册表模式**，优雅地解决了多 Provider 统一接入的问题：
-
-1. **统一类型系统** - Message、Content、Event 协议
-2. **Provider 接口** - 每个 Provider 实现统一的 ApiProvider
-3. **消息转换** - 在统一格式和 Provider 格式之间转换
-4. **事件标准化** - 将所有 Provider 的流式响应转为统一事件
-
-这种设计让开发者无需关心底层差异，一套代码支持 20+ LLM 提供商。
-
----
-
-**下篇预告：**《类型系统深度解析：Message、Content、Event 协议》 - 深入理解 pi-ai 的核心类型设计。

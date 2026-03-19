@@ -125,7 +125,7 @@ export interface ThinkingBudgets {
 - Anthropic: `thinking_budget_tokens: number`
 - Google: `thinking: { budgetTokens: number }`
 
-pi-ai 使用 `ThinkingLevel` 统一映射到各 Provider 的具体实现。
+pi-ai 使用 `ThinkingLevel` 统一映射到各 Provider 的具体实现。详见 ThinkingLevel 映射表
 
 ## 第 2 层：模型类型层
 
@@ -446,6 +446,49 @@ const s = stream(model, context, {
   thinkingEnabled: true,
   thinkingBudgetTokens: 8192,
 });
+```
+
+**ThinkingLevel 映射表：**
+
+pi-ai 使用统一的 `ThinkingLevel`（`minimal` | `low` | `medium` | `high` | `xhigh`），在不同 Provider 上映射为各自的参数：
+
+| Provider | 模型类型 | minimal | low | medium | high | xhigh |
+|---------|---------|---------|-----|--------|------|-------|
+| **OpenAI** | 所有模型 | `minimal` | `low` | `medium` | `high` | `xhigh`¹ |
+| **Anthropic** | Opus 4.6 / Sonnet 4.6 | `low` | `low` | `medium` | `high` | `max`² |
+| **Anthropic** | 旧模型 | 1024 tokens | 2048 tokens | 8192 tokens | 16384 tokens | 16384 tokens |
+| **Google** | Gemini 3 Pro | `LOW` | `LOW` | `HIGH` | `HIGH` | `HIGH` |
+| **Google** | Gemini 3 Flash | `MINIMAL` | `LOW` | `MEDIUM` | `HIGH` | `HIGH` |
+| **Google** | Gemini 2.5 Pro | 128 tokens | 2048 tokens | 8192 tokens | 32768 tokens | 32768 tokens |
+| **Google** | Gemini 2.5 Flash | 128 tokens | 2048 tokens | 8192 tokens | 24576 tokens | 24576 tokens |
+
+¹ 仅特定 OpenAI 模型支持 `xhigh`（如 o3、o1 Pro），其他模型会被映射为 `high`
+² 仅 Opus 4.6 支持 `max` 级别，其他 Anthropic 模型的 `xhigh` 会被映射为 `high`
+
+**映射实现原理：**
+
+```typescript
+// packages/ai/src/providers/simple-options.ts
+export function adjustMaxTokensForThinking(
+  baseMaxTokens: number,
+  modelMaxTokens: number,
+  reasoningLevel: ThinkingLevel,
+  customBudgets?: ThinkingBudgets,
+): { maxTokens: number; thinkingBudget: number } {
+  // 默认预算表（可被 customBudgets 覆盖）
+  const defaultBudgets: ThinkingBudgets = {
+    minimal: 1024,
+    low: 2048,
+    medium: 8192,
+    high: 16384,
+  };
+  // ...
+}
+
+// xhigh 处理：非 OpenAI 模型映射为 high
+export function clampReasoning(effort: ThinkingLevel | undefined) {
+  return effort === "xhigh" ? "high" : effort;
+}
 ```
 
 ### Context - 对话上下文

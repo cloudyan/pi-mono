@@ -62,9 +62,13 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 	context: Context,
 	options?: OpenAICompletionsOptions,
 ): AssistantMessageEventStream => {
+	// 1. 创建事件流
 	const stream = new AssistantMessageEventStream();
 
+	// 立即返回 + 内部用 IIFE 异步处理
+	// 统一事件协议：将 OpenAI 的 ChatCompletionChunk 转换为 AssistantMessageEvent
 	(async () => {
+		// 2. 初始化输出对象
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
@@ -85,18 +89,22 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 
 		try {
 			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+			// 3. 创建 OpenAI 客户端并构建请求参数
 			const client = createClient(model, context, apiKey, options?.headers);
 			let params = buildParams(model, context, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 			}
+			// 4. 调用 OpenAI API（流式）
 			const openaiStream = await client.chat.completions.create(params, { signal: options?.signal });
+			// 5. 推送 start 事件
 			stream.push({ type: "start", partial: output });
 
 			let currentBlock: TextContent | ThinkingContent | (ToolCall & { partialArgs?: string }) | null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
+			// 状态机管理内容块
 			const finishCurrentBlock = (block?: typeof currentBlock) => {
 				if (block) {
 					if (block.type === "text") {
@@ -126,6 +134,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				}
 			};
 
+			// 6. 逐块解析 SSE 流并转换为统一事件
 			for await (const chunk of openaiStream) {
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
 				// and each chunk in a streamed completion carries the same id.
@@ -164,6 +173,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 							stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 						}
 
+						// 处理文本 delta
 						if (currentBlock.type === "text") {
 							currentBlock.text += choice.delta.content;
 							stream.push({
@@ -194,6 +204,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						}
 					}
 
+					// 处理推理内容
 					if (foundReasoningField) {
 						if (!currentBlock || currentBlock.type !== "thinking") {
 							finishCurrentBlock(currentBlock);
@@ -218,6 +229,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 						}
 					}
 
+					// 处理工具调用
 					if (choice?.delta?.tool_calls) {
 						for (const toolCall of choice.delta.tool_calls) {
 							if (
@@ -244,6 +256,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 								if (toolCall.function?.arguments) {
 									delta = toolCall.function.arguments;
 									currentBlock.partialArgs += toolCall.function.arguments;
+									// 流式解析 JSON，处理不完整的 JSON
 									currentBlock.arguments = parseStreamingJson(currentBlock.partialArgs);
 								}
 								stream.push({
@@ -284,6 +297,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 
+			// 7. 推送完成事件
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
@@ -293,6 +307,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			// Some providers via OpenRouter give additional information in this field.
 			const rawMetadata = (error as any)?.error?.metadata?.raw;
 			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			// 8. 错误处理
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

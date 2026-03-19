@@ -93,6 +93,99 @@ pi-ai 支持 20+ LLM Provider，但它是如何管理这些 Provider 的？为�
           └──────────────────────────────────────────────────────────┘
 ```
 
+
+#### 注册表工作流程图
+
+```mermaid
+sequenceDiagram
+    participant App as 应用层 stream()
+    participant Registry as 注册表 getApiProvider()
+    participant Provider as Provider 层
+    participant EventStream as 事件流层
+
+    App->>Registry: 1. getApiProvider("anthropic-messages")
+    Registry->>Registry: 2. Map.get("anthropic-messages")
+    Registry-->>App: 3. 返回 Provider(带 wrapStream 包装)
+
+    App->>Provider: 4. provider.stream(model, context, options)
+    Provider->>Provider: 5. wrapStream 检查 model.api 匹配性
+
+    alt 类型匹配
+        Provider->>EventStream: 6. 调用实际 Provider 逻辑
+        EventStream-->>App: 7. 返回统一事件流
+    else 类型不匹配
+        Provider-->>App: 抛出 Error: Mismatched api
+    end
+```
+
+---
+
+#### 注册表数据结构
+
+```typescript
+// 注册表内部结构
+interface RegisteredApiProvider {
+  provider: ApiProviderInternal;  // 包装后的 Provider
+  sourceId?: string;               // 来源标识（用于追踪）
+}
+
+// Map 存储示例
+apiProviderRegistry = new Map([
+  ["openai-completions", {
+    provider: { stream: ..., streamSimple: ... },
+    sourceId: "@mariozechner/pi-ai/openai-completions"
+  }],
+  ["anthropic-messages", {
+    provider: { stream: ..., streamSimple: ... },
+    sourceId: "@mariozechner/pi-ai/anthropic-messages"
+  }],
+  ["google-generative-ai", {
+    provider: { stream: ..., streamSimple: ... },
+    sourceId: "@mariozechner/pi-ai/google-generative-ai"
+  }],
+  // ... 其他 17+ Provider
+]);
+```
+
+---
+
+#### 为什么需要注册表？
+
+| 设计方案 | 无注册表 (if-else) | 有注册表 (Map) |
+|---------|------------------|--------------|
+| **扩展性** | 每新增 Provider 需修改调用逻辑 | 只需注册新 Provider，调用逻辑不变 |
+| **可测试性** | if-else 分支难以单独测试 | 每个 Provider 可独立注册/替换 |
+| **运行时分发** | 硬编码，无法动态切换 | 可根据配置/环境动态加载 |
+| **代码复杂度** | O(n) 分支判断 | O(1) Map 查找 |
+| **类型安全** | 运行时才知道是否匹配 | 泛型 + 包装器双重保障 |
+
+---
+
+#### 完整调用示例
+
+```typescript
+import { getModel, streamSimple, registerApiProvider } from "@mariozechner/pi-ai";
+
+// 1. 注册 Provider（框架内部自动完成）
+registerApiProvider({
+  api: "anthropic-messages",
+  stream: streamAnthropicMessages,
+  streamSimple: streamSimpleAnthropicMessages,
+});
+
+// 2. 用户使用
+const model = getModel("anthropic", "claude-sonnet-4-20250514");
+const stream = streamSimple(model, { messages: [...] });
+
+// 3. 内部查找流程
+// streamSimple -> 获取 model.api="anthropic-messages"
+//            -> getApiProvider("anthropic-messages")
+//            -> Map.get("anthropic-messages")
+//            -> 返回 anthropic Messages Provider
+//            -> 调用 streamAnthropicMessages()
+//            -> 返回统一事件流
+```
+
 ## 核心实现：延迟加载包装器
 
 ### createLazyStream - 延迟加载的核心

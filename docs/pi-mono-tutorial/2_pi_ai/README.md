@@ -51,6 +51,16 @@
    - 核心内容：不同 Provider 的消息格式差异、转换实现、兼容性处理
    - 预计时间：20 分钟
 
+   1. **[provider/openai-completions.md](provider/openai-completions.md)** - OpenAI Completions Provider 实现详解
+      - 难度：进阶
+      - 核心内容：OpenAI API 封装、请求构建、流式解析、事件映射
+      - 预计时间：25 分钟
+
+   2. **[provider/anthropic-messages.md](provider/anthropic-messages.md)** - Anthropic Messages Provider 实现详解
+      - 难度：进阶
+      - 核心内容：Anthropic API 封装、Content Block 处理、Thinking 模式、双认证
+      - 预计时间：25 分钟
+
 6. **[06-error-handling.md](06-error-handling.md)** - 错误处理与终止机制
    - 难度：进阶
    - 核心内容：错误类型、取消请求、错误恢复、最佳实践
