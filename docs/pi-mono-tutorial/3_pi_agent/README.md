@@ -19,6 +19,7 @@
 
 | 章节 | 难度 | 预计时间 | 核心内容 |
 |------|------|---------|---------|
+| **[00-README-zh.md](00-README-zh.md)** | 参考 | 10 分钟 | 官方 README 中文翻译，快速了解 pi-agent |
 | **[01-core-concepts.md](01-core-concepts.md)** | 入门 | 20 分钟 | AgentMessage、AgentState、事件流、AgentTool |
 | **[02-agent-loop.md](02-agent-loop.md)** | 进阶 | 25 分钟 | 双层循环设计、Steering/Follow-up、流式处理 |
 | **[03-tool-execution.md](03-tool-execution.md)** | 进阶 | 20 分钟 | 工具执行流程、并行/串行、流式更新、钩子机制 |
@@ -223,4 +224,4 @@ A: Agent 自动维护对话历史，只需多次调用 `prompt()` 或 `steer()`�
 
 **开始阅读**: [01-core-concepts.md](01-core-concepts.md)
 
-**最后更新**: 2026-03-18
+**最后更新**: 2026-03-19

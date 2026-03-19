@@ -21,6 +21,7 @@
 
 | 章节 | 难度 | 预计时间 | 核心内容 |
 |------|------|---------|---------|
+| **[00-README-zh.md](00-README-zh.md)** | 入门 | 15 分钟 | 官方 README 中文翻译，快速了解 pi-tui |
 | **[01-core-concepts.md](01-core-concepts.md)** | 入门 | 20 分钟 | Component 接口、TUI 容器、差分渲染、焦点管理 |
 | **[02-differential-rendering.md](02-differential-rendering.md)** | 进阶 | 25 分钟 | 三种渲染策略、同步输出、差分算法、性能优化 |
 | **[03-component-system.md](03-component-system.md)** | 进阶 | 30 分钟 | 内置组件（Text、Input、Editor、Markdown、SelectList、Image）、自定义组件 |

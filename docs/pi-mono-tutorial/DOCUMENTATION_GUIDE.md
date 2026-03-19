@@ -4,6 +4,9 @@
 
 本文档总结了编写技术系列文档的最佳实践和经验教训，用于指导后续系列章节的文档编写。
 
+- 由入门到专家
+- 由浅入深
+
 ---
 
 ## 一、前期准备阶段
@@ -87,7 +90,7 @@
 async function productionExample() {
   // 2. 有实际应用场景
   const context: Context = { messages: [] };
-  
+
   // 3. 包含错误处理
   try {
     const response = await complete(model, context);
@@ -320,15 +323,37 @@ stream(openaiModel, context, {
 ```
 series-name/
 ├── README.md              # 系列入口和导航
+├── 00-README-zh.md       # 官方 README 中文翻译（第 0 章）
 ├── 01-xxx.md             # 第一章
 ├── 02-xxx.md             # 第二章
 ├── ...
-├── 09-api-reference.md   # API 参考（可选）
 └── examples/             # 示例代码目录
     ├── basic/
     ├── advanced/
     └── production/
 ```
+
+#### README 翻译文档位置规范
+
+**位置**：`00-README-zh.md`（第 0 章）
+
+**理由**：
+1. **先读 README**：README 是包的概述，应该先了解包是做什么的
+2. **符合直觉**：00 表示"开始之前"或"第 0 章"
+3. **与官方文档对应**：README 是官方文档的入口
+4. **阅读顺序**：
+   ```
+   00-README-zh.md（了解包是什么）
+   ↓
+   01-core-concepts.md（学习核心概念）
+   ↓
+   02-xxx.md（深入学习）
+   ```
+
+**内容**：
+- 官方 README.md 的完整中文翻译
+- 包含：简介、特性、安装、快速开始、API 概览等
+- 保留所有代码示例（代码不需要翻译）
 
 ### 6.2 系列 README 模板
 

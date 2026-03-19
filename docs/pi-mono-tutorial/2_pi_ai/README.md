@@ -39,7 +39,7 @@
 
 ### API 参考（按需查阅）
 
-5. **[09-api-reference.md](09-api-reference.md)** - 完整 API 参考
+5. **[00-README-zh.md](00-README-zh.md)** - 官方 README 中文翻译，快速了解 pi-ai
    - 难度：参考
    - 核心内容：所有 API、选项、事件类型的完整说明
    - 用途：开发时查阅
