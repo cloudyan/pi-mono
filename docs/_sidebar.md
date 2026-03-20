@@ -17,7 +17,7 @@
   - [8. 高级模式](/pi-mono-tutorial/2_pi_ai/08-advanced-patterns.md)
 
 - 📚 篇章三：pi-agent 运行时
-  - [0. Agent 核心概念](/pi-mono-tutorial/3_pi_agent/00-README-zh.md)
+  - [0. 快速了解 pi-agent](/pi-mono-tutorial/3_pi_agent/00-README-zh.md)
   - [1. 核心概念](/pi-mono-tutorial/3_pi_agent/01-core-concepts.md)
   - [2. AgentLoop 设计](/pi-mono-tutorial/3_pi_agent/02-agent-loop.md)
   - [3. 工具调用与执行](/pi-mono-tutorial/3_pi_agent/03-tool-execution.md)
@@ -41,6 +41,34 @@
   - [4. 会话管理](/pi-mono-tutorial/5_pi_coding_agent/04-session-management.md)
   - [5. 交互模式](/pi-mono-tutorial/5_pi_coding_agent/05-interactive-mode.md)
   - [6. 高级功能](/pi-mono-tutorial/5_pi_coding_agent/06-advanced-features.md)
+  - 📖 扩展阅读
+    - 配置与设置
+      - [Providers](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/providers-zh.md)
+      - [自定义模型](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/models-zh.md)
+      - [设置](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/settings-zh.md)
+      - [键盘快捷键](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/keybindings-zh.md)
+      - [Shell 别名](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/shell-aliases-zh.md)
+    - 核心功能
+      - [技能系统](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/skills-zh.md)
+      - [提示词模板](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/prompt-templates-zh.md)
+      - [TUI 组件](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/tui-zh.md)
+      - [Pi 包](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/packages-zh.md)
+    - 会话与导航
+      - [Session 文件格式](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/session-zh.md)
+      - [会话树导航](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/tree-zh.md)
+      - [上下文压缩](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/compaction-zh.md)
+    - 终端与环境
+      - [终端设置](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/terminal-setup-zh.md)
+      - [tmux 配置](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/tmux-zh.md)
+      - [Windows](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/windows-zh.md)
+      - [Termux](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/termux-zh.md)
+    - 开发者接口
+      - [RPC 模式](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/rpc-zh.md)
+      - [SDK](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/sdk-zh.md)
+      - [自定义 Provider](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/custom-provider-zh.md)
+      - [JSON 事件流](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/json-zh.md)
+    - 其他
+      - [开发](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/development-zh.md)
 
 - 📚 篇章六：pi-web-ui Web 组件
   - [0. 快速开始](/pi-mono-tutorial/6_pi_web_ui/00-README-zh.md)
@@ -55,6 +83,14 @@
   - [1. Pod 管理基础](/pi-mono-tutorial/7_pods/01-pod-management.md)
   - [2. 模型部署与配置](/pi-mono-tutorial/7_pods/02-model-deployment.md)
   - [3. Agent 交互模式](/pi-mono-tutorial/7_pods/03-agent-interface.md)
+  - 📖 扩展阅读
+    - [模型部署指南](/pi-mono-tutorial/7_pods/docs-zh/models-zh.md)
+    - [GLM-4.5](/pi-mono-tutorial/7_pods/docs-zh/gml-4.5-zh.md)
+    - [Kimi-K2](/pi-mono-tutorial/7_pods/docs-zh/kimi-k2-zh.md)
+    - [Qwen3-Coder](/pi-mono-tutorial/7_pods/docs-zh/qwen3-coder-zh.md)
+    - [GPT-OSS](/pi-mono-tutorial/7_pods/docs-zh/gpt-oss-zh.md)
+    - [实现计划](/pi-mono-tutorial/7_pods/docs-zh/plan-zh.md)
+    - [实现计划详情](/pi-mono-tutorial/7_pods/docs-zh/implementation-plan-zh.md)
 
 - 📚 篇章八：mom - Slack Bot 与 Agent 编排
   - [0. 官方 README 中文翻译](/pi-mono-tutorial/8_mom/00-README-zh.md)
@@ -62,6 +98,12 @@
   - [2. Skill 系统详解](/pi-mono-tutorial/8_mom/02-skill-system.md)
   - [3. 事件系统](/pi-mono-tutorial/8_mom/03-events-system.md)
   - [4. 安全指南](/pi-mono-tutorial/8_mom/04-security-guide.md)
+  - 📖 扩展阅读
+    - [事件系统详解](/pi-mono-tutorial/8_mom/docs-zh/events-zh.md)
+    - [沙盒系统](/pi-mono-tutorial/8_mom/docs-zh/sandbox-zh.md)
+    - [Artifacts 服务器](/pi-mono-tutorial/8_mom/docs-zh/artifacts-server-zh.md)
+    - [Slack Bot 最小化配置](/pi-mono-tutorial/8_mom/docs-zh/slack-bot-minimal-guide-zh.md)
+    - [Mom 重新设计](/pi-mono-tutorial/8_mom/docs-zh/new-zh.md)
 
 - 📚 篇章九：pi-coding-agent 扩展系统
   - [0. 扩展系统概览](/pi-mono-tutorial/9_coding-agent-extensions/README.md)

@@ -1,0 +1,115 @@
+### Qwen-Coder
+- [ ] Qwen2.5-Coder-32B-Instruct
+  - HF: Qwen/Qwen2.5-Coder-32B-Instruct
+  - 硬件要求:
+    - 1x H100/H200
+      - --tool-call-parser hermes --enable-auto-tool-choice
+    - 2x H100/H200
+      - --tensor-parallel-size 2 --tool-call-parser hermes --enable-auto-tool-choice
+  - 备注: 大小和性能的良好平衡。支持单 GPU 运行。
+- [ ] Qwen3-Coder-480B-A35B-Instruct (BF16)
+  - HF: Qwen/Qwen3-Coder-480B-A35B-Instruct
+  - 硬件要求:
+    - 8x H200/H20
+      - --tensor-parallel-size 8 --max-model-len 32000 --enable-auto-tool-choice --tool-call-parser qwen3_coder
+      - 备注: 无法在单个节点上提供完整的 262K 上下文。减少 max-model-len 或增加 gpu-memory-utilization。
+- [ ] Qwen3-Coder-480B-A35B-Instruct-FP8
+  - HF: Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8
+  - 硬件要求:
+    - 8x H200/H20
+      - --max-model-len 131072 --enable-expert-parallel --data-parallel-size 8 --enable-auto-tool-choice --tool-call-parser qwen3_coder
+      - 环境变量: VLLM_USE_DEEP_GEMM=1
+      - 备注: 使用数据并行模式(非张量并行)以避免权重量化错误。推荐使用 DeepGEMM。
+- [ ] Qwen3-Coder-30B-A3B-Instruct (BF16)
+  - HF: Qwen/Qwen3-Coder-30B-A3B-Instruct
+  - 硬件要求:
+    - 1x H100/H200
+      - --enable-auto-tool-choice --tool-call-parser qwen3_coder
+      - 备注: 适合单 GPU 运行。模型权重约 60GB。
+    - 2x H100/H200
+      - --tensor-parallel-size 2 --enable-auto-tool-choice --tool-call-parser qwen3_coder
+      - 备注: 用于更高的吞吐量/更长的上下文。
+- [ ] Qwen3-Coder-30B-A3B-Instruct-FP8
+  - HF: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+  - 硬件要求:
+    - 1x H100/H200
+      - --enable-auto-tool-choice --tool-call-parser qwen3_coder
+      - 环境变量: VLLM_USE_DEEP_GEMM=1
+      - 备注: FP8 量化,模型权重约 30GB。非常适合单 GPU 部署。
+
+### GPT-OSS
+- 备注: 需要 vLLM 0.10.1+gptoss。通过 /v1/responses 端点提供内置工具(浏览、Python)。函数调用(function calling)尚未支持。推荐使用 --async-scheduling 以获得更高性能(不兼容结构化输出)。
+- [ ] GPT-OSS-20B
+  - HF: openai/gpt-oss-20b
+  - 硬件要求:
+    - 1x H100/H200
+      - --async-scheduling
+    - 1x B200
+      - --async-scheduling
+      - 环境变量: VLLM_USE_TRTLLM_ATTENTION=1 VLLM_USE_TRTLLM_DECODE_ATTENTION=1 VLLM_USE_TRTLLM_CONTEXT_ATTENTION=1 VLLM_USE_FLASHINFER_MXFP4_MOE=1
+- [ ] GPT-OSS-120B
+  - HF: openai/gpt-oss-120b
+  - 硬件要求:
+    - 1x H100/H200
+      - --async-scheduling
+      - 备注: 需要 --gpu-memory-utilization 0.95 --max-num-batched-tokens 1024 以避免内存不足(OOM)
+    - 2x H100/H200
+      - --tensor-parallel-size 2 --async-scheduling
+      - 备注: 设置 --gpu-memory-utilization <0.95 以避免内存不足(OOM)
+    - 4x H100/H200
+      - --tensor-parallel-size 4 --async-scheduling
+    - 8x H100/H200
+      - --tensor-parallel-size 8 --async-scheduling --max-model-len 131072 --max-num-batched-tokens 10240 --max-num-seqs 128 --gpu-memory-utilization 0.85 --no-enable-prefix-caching
+    - 1x B200
+      - --async-scheduling
+      - 环境变量: VLLM_USE_TRTLLM_ATTENTION=1 VLLM_USE_TRTLLM_DECODE_ATTENTION=1 VLLM_USE_TRTLLM_CONTEXT_ATTENTION=1 VLLM_USE_FLASHINFER_MXFP4_MOE=1
+    - 2x B200
+      - --tensor-parallel-size 2 --async-scheduling
+      - 环境变量: VLLM_USE_TRTLLM_ATTENTION=1 VLLM_USE_TRTLLM_DECODE_ATTENTION=1 VLLM_USE_TRTLLM_CONTEXT_ATTENTION=1 VLLM_USE_FLASHINFER_MXFP4_MOE=1
+
+### GLM-4.5
+- 备注: 列出的配置支持缩减的上下文。要获得完整的 128K 上下文,需要双倍 GPU 数量。模型默认启用思考模式(可通过 API 参数禁用)。
+- [ ] GLM-4.5 (BF16)
+  - HF: zai-org/GLM-4.5
+  - 硬件要求:
+    - 16x H100
+      - --tensor-parallel-size 16 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+    - 8x H200
+      - --tensor-parallel-size 8 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+  - 备注: 在 8x H100 上,可能需要 --cpu-offload-gb 16 以避免内存不足(OOM)。完整 128K 上下文需要 32x H100 或 16x H200。
+- [ ] GLM-4.5-FP8
+  - HF: zai-org/GLM-4.5-FP8
+  - 硬件要求:
+    - 8x H100
+      - --tensor-parallel-size 8 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+    - 4x H200
+      - --tensor-parallel-size 4 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+  - 备注: 完整 128K 上下文需要 16x H100 或 8x H200。
+- [ ] GLM-4.5-Air (BF16)
+  - HF: zai-org/GLM-4.5-Air
+  - 硬件要求:
+    - 4x H100
+      - --tensor-parallel-size 4 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+    - 2x H200
+      - --tensor-parallel-size 2 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+  - 备注: 完整 128K 上下文需要 8x H100 或 4x H200。
+- [ ] GLM-4.5-Air-FP8
+  - HF: zai-org/GLM-4.5-Air-FP8
+  - 硬件要求:
+    - 2x H100
+      - --tensor-parallel-size 2 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+    - 1x H200
+      - --tensor-parallel-size 1 --tool-call-parser glm45 --reasoning-parser glm45 --enable-auto-tool-choice
+  - 备注: 完整 128K 上下文需要 4x H100 或 2x H200。
+
+### Kimi
+- 备注: 需要 vLLM v0.10.0rc1+。FP8 量化下 128k 上下文至少需要 16 个 GPU。复用 DeepSeekV3 架构, model_type="kimi_k2"。
+- [ ] Kimi-K2-Instruct
+  - HF: moonshotai/Kimi-K2-Instruct
+  - 硬件要求:
+    - 16x H200/H20
+      - --tensor-parallel-size 16 --trust-remote-code --enable-auto-tool-choice --tool-call-parser kimi_k2
+      - 备注: 纯 TP 模式。对于超过 16 个 GPU 的情况,需要结合流水线并行(pipeline-parallelism)。
+    - 16x H200/H20 (DP+EP 模式)
+      - --data-parallel-size 16 --data-parallel-size-local 8 --enable-expert-parallel --max-num-batched-tokens 8192 --max-num-seqs 256 --gpu-memory-utilization 0.85 --trust-remote-code --enable-auto-tool-choice --tool-call-parser kimi_k2
+      - 备注: 数据并行 + 专家并行模式以实现更高吞吐量。需要多节点设置和适当的网络配置。
