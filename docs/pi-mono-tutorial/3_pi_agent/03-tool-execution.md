@@ -35,29 +35,20 @@ AI：我来帮你读取。
 
 ## 工具执行架构
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     工具执行流程                                 │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  LLM 响应                                                        │
-│    │                                                            │
-│    ▼                                                            │
-│  解析 toolCall 内容                                              │
-│    │                                                            │
-│    ▼                                                            │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │              executeToolCalls()                          │   │
-│  │  1. 准备工具调用（before 钩子）                           │   │
-│  │  2. 执行工具（并行/串行）                                 │   │
-│  │  3. 处理结果（after 钩子）                                │   │
-│  │  4. 构造 ToolResultMessage                               │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│    │                                                            │
-│    ▼                                                            │
-│  返回结果给 LLM                                                  │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    A[LLM 响应] --> B[解析 toolCall 内容]
+    B --> C[executeToolCalls]
+
+    subgraph C["executeToolCalls 内部流程"]
+        C1[1. 准备工具调用<br/>before 钩子]
+        C2[2. 执行工具<br/>并行/串行]
+        C3[3. 处理结果<br/>after 钩子]
+        C4[4. 构造 ToolResultMessage]
+    end
+
+    C --> D[返回结果给 LLM]
+    C1 --> C2 --> C3 --> C4
 ```
 
 ## 工具定义回顾
@@ -65,7 +56,7 @@ AI：我来帮你读取。
 ```typescript
 // packages/agent/src/types.ts
 
-export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> 
+export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any>
   extends Tool<TParameters> {
   label: string;  // UI 显示用的标签
   execute: (
@@ -96,11 +87,11 @@ const readFileTool: AgentTool = {
   }),
   execute: async (toolCallId, params, signal, onUpdate) => {
     const content = await fs.readFile(params.path, "utf-8");
-    
+
     return {
       // 返回给 LLM 的内容（简洁）
       content: [{ type: "text", text: content }],
-      
+
       // 返回给 UI 的详情（丰富）
       details: {
         path: params.path,
@@ -129,14 +120,14 @@ const assistantMessage: AssistantMessage = {
   role: "assistant",
   content: [
     { type: "text", text: "我来帮你读取文件。" },
-    { 
-      type: "toolCall", 
+    {
+      type: "toolCall",
       id: "call_abc123",
       name: "read_file",
       arguments: '{"path": "/path/to/file.txt"}'
     },
-    { 
-      type: "toolCall", 
+    {
+      type: "toolCall",
       id: "call_def456",
       name: "read_file",
       arguments: '{"path": "/path/to/another.txt"}'
@@ -164,25 +155,25 @@ async function executeToolCalls(
 ): Promise<ToolResultMessage[]> {
   // 1. 查找工具
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-  
+
   // 2. 准备工具调用（验证参数、执行 before 钩子）
   const prepared = await Promise.all(
     toolCalls.map(async (tc) => {
       const tool = context.tools.find((t) => t.name === tc.name);
       if (!tool) throw new Error(`Unknown tool: ${tc.name}`);
-      
+
       // 解析参数
       const args = JSON.parse(tc.arguments);
-      
+
       // 执行 before 钩子
       if (config.beforeToolExecution) {
         await config.beforeToolExecution(tc.id, tool, args);
       }
-      
+
       return { toolCall: tc, tool, args };
     })
   );
-  
+
   // 3. 执行工具...
 }
 ```
@@ -241,7 +232,7 @@ async function executePreparedToolCall(
   emit: AgentEventSink,
 ): Promise<ToolExecutionResult> {
   const { toolCall, tool, args } = prepared;
-  
+
   // 1. 发射开始事件
   await emit({
     type: "tool_execution_start",
@@ -249,10 +240,10 @@ async function executePreparedToolCall(
     toolName: tool.name,
     args,
   });
-  
+
   // 2. 添加到 pending 集合
   context.pendingToolCalls.add(toolCall.id);
-  
+
   try {
     // 3. 执行工具
     const result = await tool.execute(
@@ -266,12 +257,12 @@ async function executePreparedToolCall(
         update,
       })
     );
-    
+
     // 4. 执行 after 钩子
     if (config.afterToolExecution) {
       await config.afterToolExecution(toolCall.id, tool, args, result);
     }
-    
+
     // 5. 发射完成事件
     await emit({
       type: "tool_execution_end",
@@ -280,12 +271,12 @@ async function executePreparedToolCall(
       result,
       isError: false,
     });
-    
+
     return { result, isError: false };
   } catch (error: any) {
     // 6. 错误处理
     const errorResult = createErrorToolResult(error.message);
-    
+
     await emit({
       type: "tool_execution_end",
       toolCallId: toolCall.id,
@@ -293,7 +284,7 @@ async function executePreparedToolCall(
       result: errorResult,
       isError: true,
     });
-    
+
     return { result: errorResult, isError: true };
   } finally {
     // 7. 从 pending 集合移除
@@ -320,38 +311,38 @@ const longRunningTool: AgentTool = {
       content: [{ type: "text", text: "开始编译..." }],
       details: { progress: 0, stage: "init" },
     });
-    
+
     // 阶段 1：解析依赖
     await parseDependencies(params.projectPath);
     onUpdate?.({
       content: [{ type: "text", text: "依赖解析完成" }],
       details: { progress: 25, stage: "dependencies" },
     });
-    
+
     // 阶段 2：类型检查
     await typeCheck(params.projectPath);
     onUpdate?.({
       content: [{ type: "text", text: "类型检查完成" }],
       details: { progress: 50, stage: "typecheck" },
     });
-    
+
     // 阶段 3：编译
     await compile(params.projectPath);
     onUpdate?.({
       content: [{ type: "text", text: "编译完成" }],
       details: { progress: 75, stage: "compile" },
     });
-    
+
     // 阶段 4：打包
     const output = await bundle(params.projectPath);
     onUpdate?.({
       content: [{ type: "text", text: "打包完成" }],
       details: { progress: 100, stage: "bundle" },
     });
-    
+
     return {
       content: [{ type: "text", text: output }],
-      details: { 
+      details: {
         duration: Date.now() - startTime,
         outputSize: output.length,
       },
@@ -384,21 +375,21 @@ const agent = new Agent({
     if (tool.name === "write_file" && args.path.includes("/etc/")) {
       throw new Error("无权修改系统文件");
     }
-    
+
     // 2. 日志记录
     console.log(`[Tool] ${tool.name}(${JSON.stringify(args)})`);
-    
+
     // 3. 速率限制
     await rateLimiter.check(tool.name);
   },
-  
+
   // 工具执行后
   afterToolExecution: async (toolCallId, tool, args, result) => {
     // 1. 结果缓存
     if (tool.name === "read_file") {
       cache.set(args.path, result);
     }
-    
+
     // 2. 审计日志
     auditLog.record({
       tool: tool.name,
@@ -406,7 +397,7 @@ const agent = new Agent({
       result: result.content[0].text.slice(0, 100),
       timestamp: Date.now(),
     });
-    
+
     // 3. 指标收集
     metrics.recordToolExecution(tool.name, Date.now() - startTime);
   },
@@ -507,7 +498,7 @@ const listDirectoryTool: AgentTool = {
     const listing = entries
       .map(e => `${e.isDirectory() ? "📁" : "📄"} ${e.name}`)
       .join("\n");
-    
+
     return {
       content: [{ type: "text", text: listing }],
       details: {
@@ -538,45 +529,39 @@ await agent.prompt("读取 package.json 的内容");
 
 ## 工具调用的生命周期
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    工具调用完整生命周期                          │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  1. LLM 生成 toolCall                                           │
-│     └── 包含：id, name, arguments                               │
-│                                                                 │
-│  2. 解析参数                                                     │
-│     └── JSON.parse(arguments) → 验证参数类型                     │
-│                                                                 │
-│  3. 查找工具                                                     │
-│     └── tools.find(t => t.name === toolCall.name)               │
-│                                                                 │
-│  4. 执行 before 钩子                                             │
-│     └── beforeToolExecution?.(id, tool, args)                   │
-│                                                                 │
-│  5. 发射 tool_execution_start 事件                               │
-│                                                                 │
-│  6. 执行工具                                                     │
-│     └── tool.execute(id, args, signal, onUpdate)                │
-│         ├── 可能多次调用 onUpdate（流式更新）                    │
-│         └── 返回 AgentToolResult                                │
-│                                                                 │
-│  7. 执行 after 钩子                                              │
-│     └── afterToolExecution?.(id, tool, args, result)            │
-│                                                                 │
-│  8. 发射 tool_execution_end 事件                                 │
-│                                                                 │
-│  9. 构造 ToolResultMessage                                      │
-│     └── { role: "toolResult", toolCallId, content, isError }    │
-│                                                                 │
-│  10. 添加到对话历史                                              │
-│      └── messages.push(toolResultMessage)                       │
-│                                                                 │
-│  11. 返回给 LLM                                                  │
-│      └── 进入下一轮对话                                          │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+    participant LLM as LLM
+    participant P as Parser
+    participant TM as ToolManager
+    participant H as Hooks
+    participant E as ToolExecutor
+    participant C as ChatHistory
+
+    LLM->>P: 生成 toolCall<br/>(id, name, arguments)
+    P->>P: JSON.parse 解析参数
+    P->>TM: 查找工具
+
+    TM->>H: beforeToolExecution(id, tool, args)
+    H-->>TM: 返回
+
+    TM->>TM: 发射 tool_execution_start 事件
+
+    TM->>E: tool.execute(id, args, signal, onUpdate)
+    loop 流式更新
+        E->>TM: onUpdate(partial)
+    end
+    E-->>TM: 返回 AgentToolResult
+
+    TM->>H: afterToolExecution(id, tool, args, result)
+    H-->>TM: 返回
+
+    TM->>TM: 发射 tool_execution_end 事件
+
+    TM->>TM: 构造 ToolResultMessage
+    TM->>C: messages.push(toolResultMessage)
+
+    TM->>LLM: 返回结果，进入下一轮对话
 ```
 
 ## 最佳实践
@@ -595,7 +580,7 @@ await agent.prompt("读取 package.json 的内容");
    ```typescript
    // ✅ 正确
    if (!exists) throw new Error("File not found");
-   
+
    // ❌ 错误
    return { content: [{ text: "Error: not found" }] };
    ```
@@ -639,7 +624,7 @@ await agent.prompt("读取 package.json 的内容");
    ```typescript
    // ❌ 错误：返回整个文件内容
    return { content: [{ text: fileContent }] };  // 10MB!
-   
+
    // ✅ 正确：截断或分页
    return { content: [{ text: fileContent.slice(0, 10000) }] };
    ```

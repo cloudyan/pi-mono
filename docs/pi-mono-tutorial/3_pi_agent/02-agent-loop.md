@@ -22,48 +22,174 @@ AgentLoop 就是管理这个循环的核心机制。
 
 ## AgentLoop 架构
 
+传统 AgentLoop 使用单层循环，只处理工具调用（不支持连续对话和打断对话），伪代码如下
+
+```typescript
+// 简化版本：单层循环
+while (true) {
+  const response = await model(messages, tools);
+  if (response.stopReason !== "tool_use") break;
+  const results = await executeTools(response.toolCalls);
+  messages.push(...results);
+}
+```
+
+架构图如下：
+
 ```mermaid
 flowchart TB
-    subgraph AgentLoop["AgentLoop 架构"]
+    Start([开始]) --> Init[初始化消息队列]
+    Init --> Loop{循环条件}
+
+    subgraph SingleLoop["单循环：基础对话循环"]
         direction TB
-
-        subgraph Loops["双层循环"]
-            direction LR
-            Outer["外层循环<br/>(Follow-up)"]
-            Inner["内层循环<br/>(Tool Calls)"]
-            Stream["流式响应处理"]
-        end
-
-        Outer --> Inner --> Stream
-
-        subgraph Emitter["事件发射器"]
-            Events["agent_start / turn_start / message_* / ..."]
-        end
-
-        Loops --> Emitter
+        Loop -->|继续| CallLLM["调用 LLM"]
+        CallLLM --> CheckError{"响应正常?"}
+        CheckError -->|错误| ErrorEnd([错误结束])
+        CheckError -->|正常| CheckTool{"有工具调用?"}
+        CheckTool -->|是| ExecTool["执行工具"]
+        ExecTool --> UpdateMsg["更新消息队列"]
+        UpdateMsg --> Loop
+        CheckTool -->|否| SuccessEnd([正常结束])
     end
+
+    style SingleLoop fill:#e1f5fe
 ```
+
+特点：
+- 单层 while 循环
+- 只处理：LLM 调用 → 工具执行 → 循环
+- 无 Steering/Follow-up 机制
+- 适用于简单对话场景
 
 ## 双层循环设计
 
-AgentLoop 采用**双层循环**设计：
+pi-agent AgentLoop 采用**双层循环**设计
+
+### 双层循环对比
+
+为了更清晰地理解双层循环的设计，我们用一张表对比两者的区别：
+
+| | 内层循环 | 外层循环 |
+|------|------|------|
+| **循环条件** | `hasMoreToolCalls \|\| pendingMessages.length > 0` | `true` + break |
+| **职责** | 完成单个 Turn（LLM 响应 → 工具执行） | 处理 Follow-up 消息队列 |
+| **优先级** | 处理 Steering（高优先级） | 处理 Follow-up（低优先级） |
+| **退出时机** | 无工具调用且无 pending 消息 | 无 Follow-up 消息 |
+
+你可以与单层循环对照查看，实际的双层循环设计在单循环基础上扩展：
+
+```typescript
+// 实际代码：双层循环
+while (true) {                    // ← 外层循环：处理 Follow-up
+  while (hasMoreToolCalls) {      // ← 内层循环：你的简化版本
+    await model();
+    await executeTools();
+  }
+  if (followUpMessages.length > 0) continue; // ← 外层循环的价值
+  break;
+}
+```
+
+### 设计价值
+
+| 场景 | 单层循环 | 双层循环 |
+|------|------|------|
+| 简单问答 | ✓ | ✓ |
+| 工具调用 | ✓ | ✓ |
+| 实时纠正（Steering） | ✗ | ✓ |
+| 连续对话（Follow-up） | ✗ | ✓ |
+
+**核心要点**：
+1. **内层循环** = 处理工具调用，完成单个 Turn
+2. **外层循环** = 支持更复杂的对话场景（实时干预 + 连续对话）
+3. **如果不需要 Steering/Follow-up** → 单层循环足够
+4. **需要构建响应式 UI 或实时交互** → 双层循环是必要的
+
+架构图如下
 
 ```mermaid
 flowchart TD
-    subgraph OuterLoop["外层循环：处理 Follow-up 消息队列"]
+    Start([开始]) --> Init["初始化<br/>pendingMessages = steeringQueue"]
+
+    subgraph OuterLoop["外层循环：Follow-up 消息队列"]
         direction TB
-        O1["检查 steeringQueue"] -->|有消息| InnerLoop
-        O1 -->|无消息| O2["检查 followUpQueue"]
-        O2 -->|有消息| InnerLoop
-        O2 -->|无消息| End["结束"]
+        Init --> InnerLoop
+        InnerLoop --> CheckFollowUp["检查 followUpQueue"]
+        CheckFollowUp -->|有消息| SetPending["pendingMessages = followUp"]
+        SetPending --> InnerLoop
+        CheckFollowUp -->|无消息| End([结束])
     end
 
-    subgraph InnerLoop["内层循环：处理单轮对话 Turn"]
+    subgraph InnerLoop["内层循环：Turn + Steering + 工具调用"]
         direction TB
-        I1["处理 steeringQueue 消息"] --> I2["调用 LLM 获取响应"]
-        I2 --> I3{"有工具调用?"}
-        I3 -->|是| I4["执行工具"] --> I1
-        I3 -->|否| I5["Turn 结束"] --> O2
+        CheckSteering{"pendingMessages<br/>有消息?"} -->|是| ProcessSteering["处理 steering 消息<br/>高优先级注入"]
+        CheckSteering -->|否| CallLLM["调用 LLM<br/>streamAssistantResponse"]
+        ProcessSteering --> CallLLM
+
+        CallLLM --> CheckError{"stopReason<br/>正常?"}
+        CheckError -->|error/aborted| EmitError["emit turn_end<br/>emit agent_end"] --> ErrorEnd([返回])
+        CheckError -->|正常| CheckTool{"有工具调用?"}
+
+        CheckTool -->|是| ExecTools["执行工具调用<br/>executeToolCalls"]
+        ExecTools --> UpdateContext["更新消息上下文"]
+        UpdateContext --> GetSteering["获取 steering 消息<br/>getSteeringMessages"]
+        GetSteering --> CheckSteering
+
+        CheckTool -->|否| EmitTurnEnd["emit turn_end"]
+        EmitTurnEnd --> CheckFollowUp
+    end
+
+    style OuterLoop fill:#fff3e0
+    style InnerLoop fill:#e8f5e9
+```
+
+双循环详细时序图
+
+```mermaid
+sequenceDiagram
+    participant U as User/外部
+    participant OL as 外层循环
+    participant IL as 内层循环
+    participant LLM as LLM
+    participant T as Tool
+
+    Note over OL,IL: 初始化 pendingMessages = steeringQueue
+
+    loop 外层循环：处理 Follow-up
+        loop 内层循环：处理 Turn + Steering
+            alt pendingMessages 有消息
+                IL->>IL: 处理 steering 消息（高优先级）
+            end
+
+            IL->>LLM: streamAssistantResponse()
+            LLM-->>IL: 流式响应
+
+            alt 响应错误
+                IL->>U: emit agent_end
+                IL->>OL: 返回
+            else 响应正常
+                alt 有工具调用
+                    IL->>T: executeToolCalls()
+                    T-->>IL: toolResults
+                    IL->>IL: 更新上下文
+                    IL->>IL: getSteeringMessages()
+                    IL->>IL: 继续内层循环
+                else 无工具调用
+                    IL->>IL: emit turn_end
+                    IL->>OL: 内层循环结束
+                end
+            end
+        end
+
+        OL->>OL: getFollowUpMessages()
+        alt 有 follow-up 消息
+            OL->>OL: pendingMessages = followUp
+            OL->>OL: continue（继续外层循环）
+        else 无消息
+            OL->>U: emit agent_end
+            OL->>OL: break（结束）
+        end
     end
 ```
 
@@ -81,17 +207,17 @@ async function runLoop(
   streamFn?: StreamFn,
 ): Promise<void> {
   let firstTurn = true;
-  // 检查 steering 消息
+  // 初始化：检查 steering 消息
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
 
   // ═══════════════════════════════════════════════════════════
-  // 外层循环：处理 Follow-up 消息
+  // 外层循环：处理 Follow-up 消息队列
   // ═══════════════════════════════════════════════════════════
   while (true) {
     let hasMoreToolCalls = true;
 
     // ═════════════════════════════════════════════════════════
-    // 内层循环：处理工具调用和 steering 消息
+    // 内层循环：处理单轮对话 Turn + 工具调用 + steering 消息
     // ═════════════════════════════════════════════════════════
     while (hasMoreToolCalls || pendingMessages.length > 0) {
       if (!firstTurn) {
@@ -100,7 +226,7 @@ async function runLoop(
         firstTurn = false;
       }
 
-      // 1. 处理 pending 消息（steering 消息注入）
+      // 1. 处理 steering 消息（高优先级，在 LLM 调用前注入）
       if (pendingMessages.length > 0) {
         for (const message of pendingMessages) {
           await emit({ type: "message_start", message });
@@ -111,20 +237,20 @@ async function runLoop(
         pendingMessages = [];
       }
 
-      // 2. 流式获取助手响应
+      // 2. 调用 LLM，流式获取助手响应
       const message = await streamAssistantResponse(
         currentContext, config, signal, emit, streamFn
       );
       newMessages.push(message);
 
-      // 错误处理
+      // 3. 错误处理
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         await emit({ type: "turn_end", message, toolResults: [] });
         await emit({ type: "agent_end", messages: newMessages });
         return;
       }
 
-      // 3. 检查并执行工具调用
+      // 4. 检查并执行工具调用
       const toolCalls = message.content.filter((c) => c.type === "toolCall");
       hasMoreToolCalls = toolCalls.length > 0;
 
@@ -142,17 +268,17 @@ async function runLoop(
 
       await emit({ type: "turn_end", message, toolResults });
 
-      // 4. 获取下一批 steering 消息
+      // 5. 获取下一批 steering 消息（用于下一轮内层循环）
       pendingMessages = (await config.getSteeringMessages?.()) || [];
     }
 
     // ═════════════════════════════════════════════════════════
-    // 内层循环结束，检查 Follow-up 消息
+    // 内层循环结束，检查 Follow-up 消息（低优先级）
     // ═════════════════════════════════════════════════════════
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
     if (followUpMessages.length > 0) {
       pendingMessages = followUpMessages;
-      continue;  // 回到外层循环
+      continue;  // 回到外层循环，继续处理
     }
 
     break;  // 无更多消息，结束
@@ -502,10 +628,10 @@ const agent = new Agent({
   streamFn: async (model, context, options) => {
     // 1. 记录请求日志
     console.log("[LLM Request]", { model, messageCount: context.messages.length });
-    
+
     // 2. 调用实际的流函数
     const stream = streamSimple(model, context, options);
-    
+
     // 3. 包装流以添加日志
     return {
       async *[Symbol.asyncIterator]() {
