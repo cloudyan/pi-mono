@@ -1,0 +1,13 @@
+{
+  "name": "demo1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "tsx": "tsx examples/demo1/agent-v2.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

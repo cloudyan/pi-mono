@@ -292,6 +292,13 @@ async function runLoop(
 
 这是 AgentLoop 最强大的特性之一：**允许在对话进行中实时干预**。
 
+**Steering vs Follow-up**
+
+类型 | 本质 | 时机 | 效果
+--- | ---- | --- | ---
+Steering | 插入 | 当前任务执行过程中 | 补充/修改当前任务
+Follow-up | 追加 | 当前任务完全结束后 | 开启下一个新任务
+
 ### Steering（引导）
 
 **场景**：AI 正在生成代码，用户突然说"等等，用 TypeScript 而不是 JavaScript"
@@ -300,17 +307,32 @@ async function runLoop(
 // 用户输入 steering 消息
 agent.steer({
   role: "user",
-  content: [{ type: "text", text: "请改用 TypeScript" }],
+  content: "请改用 TypeScript",
   timestamp: Date.now(),
 });
 
-// Agent 会在当前 Turn 结束后处理这个消息
+// Agent 会在工具执行完成后处理这个消息
 ```
 
 **特点**：
-- 高优先级，在当前 Turn 结束后立即处理
-- 会触发新的 LLM 调用
+- 高优先级，在**每个工具执行完成后**立即检查
+- 如果有 steering 消息，会立即注入并触发新的 LLM 调用
 - 适合**实时纠正** AI 的行为
+
+### interruptMode 配置
+
+控制 steering 消息的检查时机：
+
+```typescript
+export interface AgentOptions {
+  interruptMode?: "immediate" | "wait";  // 默认: "immediate"
+}
+```
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| `"immediate"` | 每个工具调用后立即检查（默认） | 需要实时响应用户输入 |
+| `"wait"` | 延迟到当前 turn 完成后检查 | 希望工具执行完再处理新消息 |
 
 ### Follow-up（跟进）
 
@@ -320,7 +342,7 @@ agent.steer({
 // 用户输入 follow-up 消息
 agent.followUp({
   role: "user",
-  content: [{ type: "text", text: "请为刚才的代码添加单元测试" }],
+  content: "请为刚才的代码添加单元测试",
   timestamp: Date.now(),
 });
 
@@ -339,6 +361,7 @@ agent.followUp({
 export interface AgentOptions {
   steeringMode?: "all" | "one-at-a-time";  // 默认: "one-at-a-time"
   followUpMode?: "all" | "one-at-a-time";  // 默认: "one-at-a-time"
+  interruptMode?: "immediate" | "wait";    // 默认: "immediate"
 }
 ```
 
@@ -352,8 +375,18 @@ export interface AgentOptions {
 const agent = new Agent({
   steeringMode: "one-at-a-time",  // 用户说一条，AI 处理一条
   followUpMode: "all",            // 批量处理后续指令
+  interruptMode: "immediate",     // 工具执行后立即检查 steering
 });
 ```
+
+### interruptMode 配置
+
+控制 steering 消息的检查时机：
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| `"immediate"` | 每个工具调用后立即检查（默认） | 需要实时响应用户输入 |
+| `"wait"` | 延迟到当前 turn 完成后检查 | 希望工具执行完再处理新消息 |
 
 ## 流式响应处理
 
@@ -649,6 +682,78 @@ const agent = new Agent({
   },
 });
 ```
+
+## AgentLoopConfig 完整配置
+
+```typescript
+interface AgentLoopConfig {
+  // 模型配置
+  model: Model<any>;
+  apiKey?: string;
+
+  // 消息转换（必需）
+  convertToLlm: (messages: AgentMessage[]) => Promise<Message[]>;
+
+  // 上下文转换（可选）
+  transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+
+  // 消息队列回调
+  getSteeringMessages?: () => Promise<AgentMessage[]>;
+  getFollowUpMessages?: () => Promise<AgentMessage[]>;
+
+  // 工具执行配置
+  toolExecution?: "sequential" | "parallel";
+  beforeToolCall?: BeforeToolCallHook;
+  afterToolCall?: AfterToolCallHook;
+
+  // 动态 API Key 解析
+  getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+
+  // 会话 ID（用于缓存）
+  sessionId?: string;
+}
+```
+
+## 低层 API：agentLoop vs agentLoopContinue
+
+除了使用 `Agent` 类，你也可以直接使用低层 API：
+
+### agentLoop
+
+用于开始新的对话，需要传入初始消息：
+
+```typescript
+import { agentLoop } from "@mariozechner/pi-agent-core";
+
+const stream = agentLoop(
+  [{ role: "user", content: "你好", timestamp: Date.now() }],
+  context,
+  config
+);
+
+for await (const event of stream) {
+  console.log(event.type);
+}
+```
+
+### agentLoopContinue
+
+用于继续现有对话，**不添加新消息**。要求上下文的最后一条消息必须是 `user` 或 `toolResult`：
+
+```typescript
+import { agentLoopContinue } from "@mariozechner/pi-agent-core";
+
+// 用于重试或继续处理
+const stream = agentLoopContinue(context, config);
+
+for await (const event of stream) {
+  console.log(event.type);
+}
+```
+
+**使用场景**：
+- `agentLoop`：开始新对话
+- `agentLoopContinue`：重试失败的请求、继续处理已有上下文
 
 ## 总结
 
