@@ -59,6 +59,10 @@ pi-ai 是如何在内部统一处理这些差异的？今天我们就来深入�
 
 ## pi-ai 的消息转换架构
 
+关键设计: pi-ai 内部使用统一的 Context 格式，通过 Provider 特定的适配器转换为各 LLM API 所需的格式。这使得同一代码可以无缝切换不同的 LLM Provider。
+
+- 类型定义 [packages/ai/src/types.ts](/packages/ai/src/types.ts)
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     统一 Context 格式                            │
@@ -757,17 +761,238 @@ function customTransformMessages(context: Context, targetApi: Api) {
 }
 ```
 
+## transformMessages：跨模型兼容处理
+
+在跨 Provider 或跨模型调用时，消息需要额外的兼容性处理。`transformMessages` 函数负责在发送前对消息进行清理和转换。
+
+### 源码位置
+
+[`packages/ai/src/providers/transform-messages.ts`](/packages/ai/src/providers/transform-messages.ts)
+
+### 核心职责
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    transformMessages 核心职责                │
+├─────────────────────────────────────────────────────────────┤
+│  1. Tool Call ID 规范化 - 解决不同 Provider 的 ID 格式冲突   │
+│  2. Thinking 块处理 - 同模型保留，跨模型降级为 text          │
+│  3. Provider 专属数据清理 - 移除目标 Provider 不认识的字段   │
+│  4. 孤儿 Tool Call 补全 - 确保 tool call ↔ result 成对出现 │
+│  5. 错误消息过滤 - 跳过 stopReason 为 error/aborted 的消息 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 函数签名
+
+```typescript
+export function transformMessages<TApi extends Api>(
+  messages: Message[],
+  model: Model<TApi>,
+  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+): Message[]
+```
+
+### 同模型判断逻辑
+
+```typescript
+const isSameModel =
+  assistantMsg.provider === model.provider &&
+  assistantMsg.api === model.api &&
+  assistantMsg.model === model.id;
+```
+
+**为什么需要三重匹配？**
+
+| 维度 | 说明 | 示例 |
+|------|------|------|
+| `provider` | 区分不同厂商 | OpenAI vs Anthropic |
+| `api` | 同一厂商可能有多个 API | OpenAI Completions vs Responses |
+| `model` | 同一 API 下不同模型 | GPT-4 vs GPT-3.5 |
+
+### 各项处理详解
+
+#### 1. Tool Call ID 规范化
+
+**问题**：OpenAI Responses API 生成 450+ 字符的 ID，包含 `\|` 等特殊字符；Anthropic 要求 ID 匹配 `^[a-zA-Z0-9_-]+$` 且最多 64 字符。
+
+**处理**：通过 `normalizeToolCallId` 回调注入 Provider 特定的规范化逻辑。
+
+```typescript
+if (!isSameModel && normalizeToolCallId) {
+  const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
+  if (normalizedId !== toolCall.id) {
+    toolCallIdMap.set(toolCall.id, normalizedId);  // 记录映射
+    normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
+  }
+}
+```
+
+#### 2. Thinking 块处理
+
+**场景 A：脱敏内容（redacted）**
+
+```typescript
+if (block.redacted) {
+  return isSameModel ? block : [];  // 跨模型时丢弃
+}
+```
+
+**原因**：`redacted` 是加密内容，只有特定模型能解密，其他 Provider 无法识别。
+
+**场景 B：带签名的 thinking**
+
+```typescript
+if (isSameModel && block.thinkingSignature) return block;
+```
+
+**原因**：`thinkingSignature` 用于 Anthropic Extended Thinking 的完整性验证，跨模型时签名无效且会导致 API 报错。
+
+**场景 C：跨模型转换**
+
+```typescript
+if (isSameModel) return block;
+return {
+  type: "text" as const,
+  text: block.thinking,
+};
+```
+
+**原因**：OpenAI 等 Provider 不原生支持 `thinking` 块类型，转为 `text` 可保留内容供用户查看。
+
+#### 3. Provider 专属数据清理
+
+**Google 的 thoughtSignature**：
+
+```typescript
+if (!isSameModel && toolCall.thoughtSignature) {
+  normalizedToolCall = { ...toolCall };
+  delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
+}
+```
+
+**原因**：`thoughtSignature` 是 Gemini 特有的字段，用于重用思考上下文，其他 Provider 不认识会报错。
+
+#### 4. 孤儿 Tool Call 补全
+
+**问题场景**：
+
+```
+用户: "分析这个文件"
+AI: 调用 Read 工具（tool call）
+用户: "算了，换个话题"  ← 没有提供 tool result
+```
+
+**处理**：自动插入合成错误结果
+
+```typescript
+if (pendingToolCalls.length > 0) {
+  for (const tc of pendingToolCalls) {
+    if (!existingToolResultIds.has(tc.id)) {
+      result.push({
+        role: "toolResult",
+        toolCallId: tc.id,
+        toolName: tc.name,
+        content: [{ type: "text", text: "No result provided" }],
+        isError: true,  // 标记为错误
+        timestamp: Date.now(),
+      } as ToolResultMessage);
+    }
+  }
+}
+```
+
+**触发时机**：
+- 遇到新的 Assistant 消息前
+- 遇到 User 消息前（用户中断 tool 流程）
+
+**原因**：大多数 Provider 要求 tool call 必须有对应的 tool result，孤儿调用会导致 API 错误。
+
+#### 5. 错误消息过滤
+
+```typescript
+if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
+  continue;  // 跳过这条消息
+}
+```
+
+**原因**：
+- 错误/中止的消息内容不完整（可能只有部分 thinking）
+- OpenAI 会报 "reasoning without following item" 错误
+- 重放不完整消息会导致对话状态混乱
+
+### 处理流程图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  第一遍：内容转换（map）                                       │
+│  ├─ user 消息：透传不变                                        │
+│  ├─ toolResult：替换为规范化的 toolCallId                      │
+│  └─ assistant：转换内容块                                      │
+│      ├─ thinking.redacted：同模型保留，跨模型丢弃              │
+│      ├─ thinking + signature：同模型保留，跨模型转 text        │
+│      ├─ thinking 空内容：丢弃                                  │
+│      ├─ thinking 跨模型：转 text                               │
+│      ├─ toolCall.thoughtSignature：跨模型时移除                │
+│      └─ toolCall.id：跨模型时规范化                            │
+└─────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────┐
+│  第二遍：完整性修复（for 循环）                                 │
+│  ├─ 遇到新 assistant：先处理 pending 的孤儿 tool call         │
+│  ├─ 跳过 stopReason=error/aborted 的 assistant               │
+│  ├─ 收集当前 assistant 的 tool call 到 pending                │
+│  ├─ 遇到 toolResult：记录到 existingToolResultIds             │
+│  └─ 遇到 user：中断 tool 流程，处理 pending 孤儿调用            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 使用场景
+
+`transformMessages` 被 7 个 Provider 使用：
+- `anthropic.ts`
+- `openai-completions.ts`
+- `openai-responses-shared.ts`
+- `google-shared.ts`
+- `amazon-bedrock.ts`
+- `mistral.ts`
+
+### 设计哲学
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    transformMessages 设计原则                │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. 兼容性优先                                               │
+│     └─ 不认识的格式 → 转换或丢弃，绝不直接传递               │
+│                                                             │
+│  2. 数据隔离                                                 │
+│     └─ Provider 专属数据只在同 Provider 内流转               │
+│                                                             │
+│  3. 结构完整                                                 │
+│     └─ Tool call ↔ Tool result 必须成对，孤儿自动补全        │
+│                                                             │
+│  4. 状态干净                                                 │
+│     └─ 错误/中止消息不进入历史，避免污染上下文               │
+│                                                             │
+│  5. 用户可见                                                 │
+│     └─ 思考内容尽量保留（转 text），不让信息丢失             │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## 总结
 
 pi-ai 的消息转换机制设计精妙：
 
 1. **统一 Context 格式**：内部使用统一的 `Context` 格式
 2. **Provider 适配器**：每个 Provider 有自己的转换函数
-3. **双向转换**：请求时转换输入，响应时解析输出
-4. **跨 Provider 支持**：自动处理不同 Provider 间的消息转换
+3. **跨模型兼容**：`transformMessages` 处理 Provider 间的格式差异
+4. **双向转换**：请求时转换输入，响应时解析输出
 5. **兼容性处理**：通过 `compat` 设置处理 Provider 差异
 
-这种设计让开发者无需关心底层差异，一套代码支持 20+ LLM Provider。
+这种设计让开发者无需关心底层差异，一套代码支持 20+ LLM Provider，并且能够无缝切换不同模型。
 
 ---
 
