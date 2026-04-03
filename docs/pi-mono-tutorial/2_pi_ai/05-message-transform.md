@@ -57,6 +57,48 @@ pi-ai 是如何在内部统一处理这些差异的？今天我们就来深入�
 | **图片格式** | `image_url` | `image` + `source` | `inlineData` |
 | **工具调用** | `tool_calls` | `tool_use` | `functionCalls` |
 
+### 统一格式示例
+
+为了解决以上差异问题，pi-ai 采用统一的格式，然后通过对应适配器为对应 Provider 的消息结构
+
+```typescript
+// pi-ai 内部使用的统一 Context 格式
+const context: Context = {
+  systemPrompt: "You are a helpful assistant",
+  messages: [
+    // 用户消息 - 支持字符串或多模态数组
+    {
+      role: "user",
+      content: "Hello!"  // 或 [{ type: "text", text: "Hello" }, { type: "image", ... }]
+    },
+    // 助手消息 - 包含文本、思考、工具调用
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Hi there!" },
+        { type: "thinking", thinking: "Let me analyze..." },
+        { type: "toolCall", id: "call_123", name: "readFile", arguments: { path: "/tmp/test.txt" } }
+      ]
+    },
+    // 工具结果消息 - 返回工具执行结果
+    {
+      role: "toolResult",
+      toolCallId: "call_123",
+      toolName: "readFile",
+      content: [{ type: "text", text: "File content..." }],
+      isError: false
+    }
+  ],
+  tools: [
+    {
+      name: "readFile",
+      description: "Read file content",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] }
+    }
+  ]
+};
+```
+
 ## pi-ai 的消息转换架构
 
 关键设计: pi-ai 内部使用统一的 Context 格式，通过 Provider 特定的适配器转换为各 LLM API 所需的格式。这使得同一代码可以无缝切换不同的 LLM Provider。
