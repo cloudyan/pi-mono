@@ -46,7 +46,12 @@
 
 ### 进阶主题（选读）
 
-5. **[05-message-transform.md](05-message-transform.md)** - 消息格式转换的深入讲解
+5. **[05-partial-architecture.md](05-partial-architecture.md)** - Partial 状态管理架构
+   - 难度：进阶
+   - 核心内容：Partial vs 维护的数据、架构分层、与 LangChain 对比、最佳实践
+   - 预计时间：30 分钟
+
+6. **[06-message-transform.md](06-message-transform.md)** - 消息格式转换的深入讲解
    - 难度：进阶
    - 核心内容：不同 Provider 的消息格式差异、转换实现、兼容性处理
    - 预计时间：20 分钟

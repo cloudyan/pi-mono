@@ -11,14 +11,15 @@
   - [2. 类型系统深度解析](/pi-mono-tutorial/2_pi_ai/02-type-system.md)
   - [3. Provider 注册机制](/pi-mono-tutorial/2_pi_ai/03-provider-registry.md)
   - [4. 流式响应与事件驱动](/pi-mono-tutorial/2_pi_ai/04-streaming-events.md)
+  - [5. Partial 状态管理架构](/pi-mono-tutorial/2_pi_ai/05-partial-architecture.md)
   - [5. 消息转换](/pi-mono-tutorial/2_pi_ai/05-message-transform.md)
   - 📖 Provider 实现详解
     - [OpenAI Completions Provider](/pi-mono-tutorial/2_pi_ai/provider/openai-completions.md)
     - [Anthropic Messages Provider](/pi-mono-tutorial/2_pi_ai/provider/anthropic-messages.md)
-  - [6. 错误处理](/pi-mono-tutorial/2_pi_ai/06-error-handling.md)
-  - [7. 跨 Provider 交接](/pi-mono-tutorial/2_pi_ai/07-cross-provider-handoff.md)
-  - [8. 高级模式](/pi-mono-tutorial/2_pi_ai/08-advanced-patterns.md)
-  - [9. pi-ai 与 LangChain 消息格式对比](/pi-mono-tutorial/2_pi_ai/09-message-format-comparison.md)
+  - [7. 错误处理](/pi-mono-tutorial/2_pi_ai/07-error-handling.md)
+  - [8. 跨 Provider 交接](/pi-mono-tutorial/2_pi_ai/08-cross-provider-handoff.md)
+  - [9. 高级模式](/pi-mono-tutorial/2_pi_ai/09-advanced-patterns.md)
+  - [10. pi-ai 与 LangChain 消息格式对比](/pi-mono-tutorial/2_pi_ai/10-message-format-comparison.md)
 
 - 📚 篇章三：pi-agent 运行时
   - [0. 快速了解 pi-agent](/pi-mono-tutorial/3_pi_agent/00-README-zh.md)
