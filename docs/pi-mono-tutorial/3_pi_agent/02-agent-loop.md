@@ -290,18 +290,20 @@ async function runLoop(
 
 ## Steering 与 Follow-up 机制
 
-这是 AgentLoop 最强大的特性之一：**允许在对话进行中实时干预**。
+这是 AgentLoop 最强大的特性之一：**允许在对话的 Turn 边界进行干预**。
 
 **Steering vs Follow-up**
 
 类型 | 本质 | 时机 | 效果
 --- | ---- | --- | ---
-Steering | 插入 | 当前任务执行过程中 | 补充/修改当前任务
-Follow-up | 追加 | 当前任务完全结束后 | 开启下一个新任务
+Steering | 插入 | **Turn 结束后** | 影响下一个 Turn
+Follow-up | 追加 | **所有 Turn 结束后** | 开启新的对话周期
+
+> ⚠️ **重要限制**：Steering 和 Follow-up **不能中断正在进行的 Turn**。一个 Turn 一旦开始（LLM 调用），就会完整执行（包括 LLM 响应和工具执行），直到 `turn_end` 事件后才能干预。
 
 ### Steering（引导）
 
-**场景**：AI 正在生成代码，用户突然说"等等，用 TypeScript 而不是 JavaScript"
+**场景**：AI 完成了当前 Turn（包括工具执行），用户想调整方向"等等，用 TypeScript 而不是 JavaScript"
 
 ```typescript
 // 用户输入 steering 消息
@@ -311,13 +313,71 @@ agent.steer({
   timestamp: Date.now(),
 });
 
-// Agent 会在工具执行完成后处理这个消息
+// Agent 会在当前 Turn 结束后（工具执行完成，触发 turn_end 事件后）处理这个消息
 ```
 
 **特点**：
-- 高优先级，在**每个工具执行完成后**立即检查
-- 如果有 steering 消息，会立即注入并触发新的 LLM 调用
-- 适合**实时纠正** AI 的行为
+- 高优先级，在**每个 Turn 结束后**立即检查
+- 如果有 steering 消息，会注入到上下文并触发新的 LLM 调用
+- 适合**在 Turn 边界调整** AI 的行为方向
+
+**⚠️ 重要限制**：
+
+Steering **不能取消当前 Turn 已经规划的工具调用**。看下面的执行流程：
+
+```
+Turn 1 开始
+    ↓
+LLM 返回: "创建 React 项目" + toolCall_1 (create_react_app)
+    ↓
+【用户发送 steering: "等等，改用 Vue"】
+    ↓
+执行 toolCall_1 → React 项目被创建（无法阻止！）
+    ↓
+Turn 1 结束 (turn_end)
+    ↓
+检查 steering 队列 → 发现消息
+    ↓
+Turn 2 开始: 注入 steering → 重新调用 LLM
+    ↓
+LLM 返回: "好的，改用 Vue" + toolCall_2 (create_vue_app)
+    ↓
+执行 toolCall_2 → Vue 项目被创建
+    ↓
+结果: React 和 Vue 都被创建了！
+```
+
+**结论**：Steering 影响的是**下一个 Turn**，而不是当前 Turn。如果需要在工具执行前拦截，请使用 `beforeToolCall` hook（见下文）。
+
+### 工具执行前拦截：beforeToolCall Hook
+
+如果需要在工具执行前进行拦截（例如用户想取消已经规划的工具调用），可以使用 `beforeToolCall` hook：
+
+```typescript
+const agent = new Agent({
+  initialState: { ... },
+  beforeToolCall: async (toolCall, context) => {
+    // 可以在这里检查是否需要取消工具调用
+    // 例如：显示确认对话框，或检查用户是否发送了取消指令
+
+    if (shouldCancelToolCall(toolCall)) {
+      throw new Error("工具调用被用户取消");
+    }
+
+    // 返回 true 继续执行，返回 false 或抛出错误取消
+    return true;
+  },
+});
+```
+
+> beforeToolCall 是真正意义上的"拦截"机制，它可以在工具执行前（turn_end 触发前）阻止工具执行，并返回错误结果给 LLM。
+
+**与 Steering 的区别**：
+
+| 机制 | 时机 | 能力 |
+|------|------|------|
+| **Steering** | Turn 结束后生效 | 影响下一个 Turn 的 LLM 调用 |
+| **beforeToolCall** | 工具执行前生效 | 可以阻止当前 Turn 的单个工具执行 |
 
 ### interruptMode 配置
 
@@ -331,8 +391,8 @@ export interface AgentOptions {
 
 | 模式 | 行为 | 适用场景 |
 |------|------|---------|
-| `"immediate"` | 每个工具调用后立即检查（默认） | 需要实时响应用户输入 |
-| `"wait"` | 延迟到当前 turn 完成后检查 | 希望工具执行完再处理新消息 |
+| `"immediate"` | 每个 Turn 结束后立即检查（默认） | 需要在 Turn 边界快速响应 |
+| `"wait"` | 延迟到所有 Turn 完成后检查 | 希望完成全部任务后再处理新消息 |
 
 ### Follow-up（跟进）
 
@@ -755,6 +815,74 @@ for await (const event of stream) {
 - `agentLoop`：开始新对话
 - `agentLoopContinue`：重试失败的请求、继续处理已有上下文
 
+## 设计考量：为什么 Steering 设计在 Turn 结束后生效？
+
+一个常见的问题是：**为什么不在工具执行前处理 Steering，而是在 Turn 结束后？**
+
+### 方案对比
+
+| 方案 | 时序 | 优点 | 缺点 |
+|------|------|------|------|
+| **当前设计**<br>（Turn 结束后） | LLM 响应 → 工具执行 → Turn 结束 → 检查 Steering | • Turn 原子性清晰<br>• 消息顺序一致<br>• 实现简单 | • 不能及时取消工具 |
+| **对比方案**<br>（工具执行前） | LLM 响应 → 检查 Steering → 工具执行 → Turn 结束 | • 可以及时干预 | • 破坏 Turn 原子性<br>• 消息历史混乱<br>• 需要重新调用 LLM |
+
+### 为什么当前设计更合理
+
+#### 1. Turn 的原子性
+
+一个 Turn = 一次 LLM 调用 + 其规划的所有工具执行
+
+如果在工具执行前插入 Steering：
+```
+LLM: "我要做 A、B、C"
+     ↓
+【插入 Steering: "等等，改做 B、C"】
+     ↓
+问题：A 还执行吗？
+     - 执行：不符合用户新意图
+     - 不执行：Turn 不完整（LLM 规划了 3 个，只执行 2 个）
+```
+
+这会破坏 Turn 的语义完整性。
+
+#### 2. 消息历史的一致性
+
+如果在 Turn 中间插入 Steering：
+```
+消息历史：
+1. user: "创建 React"
+2. assistant: "好的" + toolCall_A  ← LLM 已经返回了这条消息
+3. 【插入】user: "等等，改用 Vue"   ← 这条消息插在 assistant 消息中间？
+4. toolResult_A                      ← 工具结果怎么办？
+```
+
+消息顺序变得混乱，不符合对话的自然流程。
+
+#### 3. 更好的替代方案已存在
+
+如果需要在工具执行前拦截，使用 **`beforeToolCall` hook**：
+
+```typescript
+beforeToolCall: async ({ toolCall }) => {
+  // 检查全局状态，如用户是否点击了"取消"
+  if (userClickedCancel) {
+    return { block: true, reason: "用户已取消" };
+  }
+}
+```
+
+这比在 Turn 中间处理 Steering 更清晰、更可控。
+
+### 结论
+
+> **Steering 的设计目的是"调整方向"，不是"撤销操作"。**
+
+- **Steering**：在 Turn 边界调整下一个 Turn 的方向
+- **beforeToolCall**：在工具执行前细粒度拦截单个工具
+- **AbortSignal**：完全中断整个 Agent
+
+三者各有适用场景，共同构成完整的干预机制。
+
 ## 总结
 
 AgentLoop 的核心设计：
@@ -764,6 +892,7 @@ AgentLoop 的核心设计：
 3. **流式处理**：实时更新 partialMessage，支持中断恢复
 4. **事件驱动**：完整的事件生命周期，便于构建响应式 UI
 5. **错误隔离**：工具错误不中断对话，顶层错误有兜底处理
+6. **干预机制**：Steering（Turn 边界）+ beforeToolCall（工具前）+ AbortSignal（全局中断）
 
 ---
 

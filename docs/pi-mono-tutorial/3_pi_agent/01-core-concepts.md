@@ -87,7 +87,7 @@ export interface CustomAgentMessages {
 
 ```typescript
 // 扩展自定义消息类型
-declare module "@mariozechner/pi-agent-core" {
+declare module "@mariozechner/agent" {
   interface CustomAgentMessages {
     // 代码预览消息（仅 UI 使用）
     codePreview: {
@@ -163,7 +163,6 @@ Agent 维护完整的状态，你可以随时访问：
 export interface AgentState {
   systemPrompt: string;           // 系统提示词
   model: Model<any>;              // 当前使用的模型
-  thinkingLevel: ThinkingLevel;   // 思考级别 (off/minimal/low/medium/high/xhigh)
   tools: AgentTool<any>[];        // 可用工具列表
   messages: AgentMessage[];       // 完整对话历史
   isStreaming: boolean;           // 是否正在流式输出
@@ -171,6 +170,9 @@ export interface AgentState {
   pendingToolCalls: Set<string>;  // 正在执行的工具调用
   error?: string;                 // 错误信息
 }
+```
+
+> **注意**：`thinkingLevel` 是在创建 Agent 时通过 `initialState` 或 `setThinkingLevel()` 方法设置的，用于控制模型的推理深度（off/minimal/low/medium/high/xhigh）。它不会存储在 `AgentState` 接口中，而是通过 Agent 实例单独管理。
 ```
 
 ### 状态访问与修改
@@ -195,7 +197,7 @@ agent.setThinkingLevel("high");
 agent.setTools([newTool1, newTool2]);
 
 // 会话管理
-agent.sessionId = "session-123";  // 用于 Provider 缓存
+agent.sessionId = "session-123";  // 用于 Provider 缓存（如 OpenAI Codex 的会话缓存）
 agent.replaceMessages(newMessages);  // 替换消息历史
 agent.appendMessage(message);  // 追加消息
 agent.clearMessages();  // 清空消息
@@ -314,7 +316,7 @@ Agent 的工具比 pi-ai 的 Tool 更强大，增加了执行函数：
 
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any>
   extends Tool<TParameters> {
-  label: string;  // UI 显示用的标签
+  label: string;  // UI 显示用的标签（必需）
   execute: (
     toolCallId: string,
     params: Static<TParameters>,
@@ -322,6 +324,12 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
     onUpdate?: AgentToolUpdateCallback<TDetails>,
   ) => Promise<AgentToolResult<TDetails>>;
 }
+```
+
+> **关于 `label` 字段**：
+> - `label` 是 **必需字段**（非可选），用于在 UI 中显示工具的人类可读名称
+> - 与 `name`（机器标识符）不同，`label` 面向用户，建议使用中文或友好的英文描述
+> - 例如：`name: "read_file"` vs `label: "读取文件"`
 
 export interface AgentToolResult<T> {
   content: (TextContent | ImageContent)[];  // 返回给 LLM 的内容
@@ -383,6 +391,28 @@ execute: async (toolCallId, params, signal) => {
 
   return { content: [...], details: {...} };
 }
+```
+
+**错误处理流程**：
+
+当工具抛出错误时，Agent 会自动处理：
+
+1. **捕获错误**：Agent 捕获异常并包装为 `isError: true` 的 tool result
+2. **事件通知**：通过 `tool_execution_end` 事件通知 UI，包含 `isError: true` 标志
+3. **LLM 反馈**：错误信息作为 `toolResult` 消息发送给 LLM，让模型知道执行失败
+4. **状态记录**：错误信息会记录在 `AgentState.error` 字段中
+
+```typescript
+// 订阅工具执行事件以处理错误
+agent.subscribe((event) => {
+  if (event.type === "tool_execution_end") {
+    if (event.isError) {
+      console.error(`工具 ${event.toolName} 执行失败:`, event.result.content[0].text);
+    } else {
+      console.log(`工具 ${event.toolName} 执行成功`);
+    }
+  }
+});
 ```
 
 ## 快速开始
@@ -492,6 +522,94 @@ flowchart TB
     style PiAi fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
 ```
 
+## 核心概念五：干预机制（Steering & Follow-up）
+
+Agent 提供了两种干预机制，让你可以在 **Turn 边界** 影响 Agent 的行为：
+
+> ⚠️ **重要限制**：Steering 和 Follow-up **不能中断正在进行的 Turn**。一个 Turn 一旦开始（调用 LLM），就会完整执行（包括 LLM 响应和工具执行），直到 `turn_end` 后才能干预。
+
+### Steering（转向）
+
+在 Agent 完成当前 Turn（包括工具执行）后，你可以发送 Steering 消息来**影响下一个 Turn**：
+
+```typescript
+// 用户想调整 AI 的方向
+agent.steer({
+  role: "user",
+  content: "停！先不要读那个文件，帮我看看 package.json instead.",
+  timestamp: Date.now(),
+});
+```
+
+**特点**：
+- 在 **Turn 结束后**（`turn_end` 事件后）生效
+- 用于**调整下一个 Turn 的方向**
+- 适合用户在 Turn 边界临时改变主意的场景
+
+**⚠️ 不能取消已规划的工具调用**：
+
+Steering **不能取消当前 Turn 已经规划的工具调用**。例如：
+
+```
+Turn 1: LLM 返回 "创建 React" + toolCall_1
+        ↓
+        【用户发送 steering】
+        ↓
+        执行 toolCall_1 → React 被创建（无法阻止！）
+        ↓
+Turn 1 结束
+        ↓
+Turn 2: 注入 steering → 重新调用 LLM → 可能创建 Vue
+        ↓
+结果：React 和 Vue 都被创建了
+```
+
+如果需要在工具执行前拦截，请使用 `beforeToolCall` hook（详见 02-agent-loop.md）。
+
+### Follow-up（跟进）
+
+在 Agent 完成所有 Turn、即将停止时，你可以发送 Follow-up 消息来**开启新的对话周期**：
+
+```typescript
+// Agent 刚回答完问题，用户想继续追问
+agent.followUp({
+  role: "user",
+  content: "基于以上结果，帮我生成一份报告。",
+  timestamp: Date.now(),
+});
+```
+
+**特点**：
+- 在 **所有 Turn 结束后**（`agent_end` 前）触发新的 Turn
+- 用于**连续对话**和任务链
+- 适合多轮交互的场景
+
+**与 Steering 的区别**：
+- Steering：在当前 Turn 结束后立即生效，影响下一个 Turn
+- Follow-up：在所有 Turn 结束后生效，开启新的对话周期
+
+### 工作模式
+
+两种消息都支持两种工作模式：
+
+| 模式 | 说明 |
+|------|------|
+| `"one-at-a-time"`（默认） | 每次只处理一条消息，适合顺序执行 |
+| `"all"` | 一次性处理所有队列消息，适合批量操作 |
+
+```typescript
+// 设置工作模式
+agent.setSteeringMode("one-at-a-time");
+agent.setFollowUpMode("all");
+
+// 清空队列（如果需要取消已排队的消息）
+agent.clearSteeringQueue();
+agent.clearFollowUpQueue();
+agent.clearAllQueues();
+```
+
+> **下篇详解**: [02-agent-loop.md](02-agent-loop.md) 将深入讲解 AgentLoop 的事件循环机制，包括 Steering/Follow-up 的完整实现细节、工具执行的并行/串行模式等。
+
 ## 总结
 
 pi-agent 的核心概念：
@@ -500,13 +618,11 @@ pi-agent 的核心概念：
 2. **AgentState**: 完整的状态管理，随时可访问和修改
 3. **事件流**: 细粒度的事件系统，支持构建响应式 UI
 4. **AgentTool**: 带执行函数的工具定义，支持流式更新
+5. **干预机制**: Steering 和 Follow-up 实现实时交互控制
 
 这些概念共同构成了一个**生产级的 Agent 运行时**，让你可以：
 - 维护复杂的对话状态
 - 自动执行工具调用
 - 实时响应用户干预
 - 构建流畅的流式 UI
-
----
-
-**下篇预告**: [02-agent-loop.md](02-agent-loop.md) —— 深入理解 AgentLoop 的事件循环机制，包括 Steering/Follow-up 干预系统、工具执行的并行/串行模式等。
+- 实现灵活的交互控制
