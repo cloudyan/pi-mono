@@ -18,6 +18,7 @@
   - [6. 错误处理](/pi-mono-tutorial/2_pi_ai/06-error-handling.md)
   - [7. 跨 Provider 交接](/pi-mono-tutorial/2_pi_ai/07-cross-provider-handoff.md)
   - [8. 高级模式](/pi-mono-tutorial/2_pi_ai/08-advanced-patterns.md)
+  - [9. pi-ai 与 LangChain 消息格式对比](/pi-mono-tutorial/2_pi_ai/09-message-format-comparison.md)
 
 - 📚 篇章三：pi-agent 运行时
   - [0. 快速了解 pi-agent](/pi-mono-tutorial/3_pi_agent/00-README-zh.md)

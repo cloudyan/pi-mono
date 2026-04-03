@@ -76,6 +76,11 @@
    - 核心内容：Agent Loop、状态管理、流式 UI、性能优化、安全实践
    - 预计时间：20 分钟
 
+9. **[09-message-format-comparison.md](09-message-format-comparison.md)** - pi-ai 与 LangChain 消息格式对比
+   - 难度：进阶
+   - 核心内容：协议设计差异、转换机制对比、序列化对比、使用场景建议
+   - 预计时间：25 分钟
+
 ## 学习建议
 
 ### 如果你是初学者
