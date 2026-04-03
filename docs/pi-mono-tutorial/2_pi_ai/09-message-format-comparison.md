@@ -724,7 +724,341 @@ const result = await agentExecutor.invoke({ input: "..." });
 
 ---
 
-## 7. 总结
+## 7. 架构设计深度分析
+
+### 7.1 架构模式对比
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      pi-ai: 协议适配模式                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌──────────────┐     ┌──────────────────┐     ┌─────────────┐ │
+│   │  Application │────▶│  Unified Protocol │────▶│  Anthropic  │ │
+│   │     Layer    │     │   (Message Types) │     │   Adapter   │ │
+│   └──────────────┘     └──────────────────┘     └─────────────┘ │
+│                                │                    │           │
+│                                │     ┌─────────────┘           │
+│                                │     │                           │
+│                                ▼     ▼                           │
+│                          ┌──────────────────┐                   │
+│                          │ transformMessages │                  │
+│                          │  (Centralized)    │                  │
+│                          └──────────────────┘                   │
+│                                                                  │
+│   特点：协议层统一，转换逻辑集中，Provider 只负责协议适配            │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                   LangChain: 抽象继承模式                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│   ┌──────────────┐     ┌──────────────────┐                     │
+│   │  Application │────▶│  BaseChatModel   │                     │
+│   │     Layer    │     │   (Abstract)     │                     │
+│   └──────────────┘     └────────┬─────────┘                     │
+│                                  │                               │
+│                    ┌─────────────┼─────────────┐                 │
+│                    │             │             │                 │
+│                    ▼             ▼             ▼                 │
+│              ┌──────────┐  ┌──────────┐  ┌──────────┐           │
+│              │ChatOpenAI│  │ChatAnthro│  │ ChatXxx  │           │
+│              │(extends) │  │(extends) │  │(extends) │           │
+│              └──────────┘  └──────────┘  └──────────┘           │
+│                    │             │             │                 │
+│                    └─────────────┴─────────────┘                 │
+│                                  │                               │
+│                                  ▼                               │
+│                    ┌─────────────────────────┐                   │
+│                    │ _convertMessagesToParams │                   │
+│                    │    (Distributed)         │                   │
+│                    └─────────────────────────┘                   │
+│                                                                  │
+│   特点：抽象层统一，转换逻辑分散，Provider 负责完整实现              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 7.2 核心设计决策对比
+
+| 维度 | pi-ai | LangChain 1.x | 设计哲学差异 |
+|------|-------|---------------|-------------|
+| **统一层级** | 协议层（数据） | 抽象层（行为） | pi-ai 统一数据，LangChain 统一接口 |
+| **转换位置** | 集中式（transformMessages） | 分布式（各 Provider） | pi-ai 单一职责，LangChain 各自实现 |
+| **扩展方式** | 添加转换函数 | 继承基类 | pi-ai 组合，LangChain 继承 |
+| **类型系统** | 接口/类型 | 类/继承 | pi-ai 结构化，LangChain 面向对象 |
+| **流式支持** | 原生 AsyncGenerator | 方法封装 | pi-ai 语言特性，LangChain 框架封装 |
+
+### 7.3 架构优劣深度分析
+
+#### pi-ai 的优势
+
+**1. 单一职责原则（SRP）**
+
+```typescript
+// pi-ai: 转换逻辑集中在 transformMessages
+export function transformMessages<TApi extends Api>(
+  messages: Message[],
+  model: Model<TApi>,
+  normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+): Message[] {
+  // 所有跨 Provider 转换逻辑都在这里：
+  // - 同模型保留 thinking signatures
+  // - 跨模型转换 thinking → text
+  // - 规范化 tool call ID
+  // - 处理 orphaned tool calls
+}
+```
+
+**优势：**
+- 转换逻辑一处修改，全局生效
+- 易于测试（单一函数覆盖所有场景）
+- 避免重复代码
+
+**2. 组合优于继承**
+
+```typescript
+// pi-ai: Provider 通过函数组合实现
+export async function* streamAnthropicMessages(
+  options: AnthropicMessagesOptions
+): AsyncGenerator<AssistantMessageEvent> {
+  // 1. 使用统一的 transformMessages
+  const transformedMessages = transformMessages(messages, model);
+  
+  // 2. 只关注 Provider 特定的 API 调用
+  const stream = anthropic.messages.create({...});
+  
+  // 3. 转换为统一事件流
+  for await (const event of stream) {
+    yield convertToUnifiedEvent(event);
+  }
+}
+```
+
+**优势：**
+- Provider 实现更简洁
+- 易于添加新 Provider
+- 无继承层次带来的复杂性
+
+**3. 协议优先的互操作性**
+
+```typescript
+// pi-ai: 纯 JSON 协议，天然支持跨系统
+const context = { messages: [...] };  // 纯数据
+
+// 序列化无损耗
+const saved = JSON.stringify(context);
+const restored = JSON.parse(saved);
+
+// 跨 Provider 无缝切换
+await complete(claudeModel, restored);
+await complete(gptModel, restored);  // 自动转换
+```
+
+**优势：**
+- 完全可序列化，支持持久化
+- 跨语言、跨框架兼容
+- 无版本锁定问题
+
+#### pi-ai 的劣势
+
+**1. 缺乏行为封装**
+
+```typescript
+// pi-ai: 消息是纯数据，没有方法
+interface AssistantMessage {
+  role: "assistant";
+  content: ContentBlock[];
+  // 没有 _getType()、concat() 等方法
+}
+
+// 需要外部函数处理
+function getMessageType(msg: Message): string {
+  return msg.role;  // 显式字段
+}
+```
+
+**劣势：**
+- 无法使用面向对象的多态
+- 某些操作需要外部工具函数
+- 对 OOP 开发者不够直观
+
+**2. 生态集成成本**
+
+```typescript
+// 与 LangChain 生态集成时需要适配
+function piAiToLangChain(msg: Message): BaseMessage {
+  // 需要手动转换
+  if (msg.role === "user") {
+    return new HumanMessage({ content: msg.content });
+  }
+  // ...
+}
+```
+
+**劣势：**
+- 与现有生态集成需要适配层
+- 无法直接使用 LangChain 的预置组件
+
+#### LangChain 的优势
+
+**1. 丰富的行为封装**
+
+```typescript
+// LangChain: 消息是类，包含方法
+class AIMessage extends BaseMessage {
+  _getType() { return "ai"; }
+  
+  concat(other: AIMessageChunk): AIMessageChunk {
+    // 内置合并逻辑
+  }
+  
+  static isInstance(message: BaseMessage): boolean {
+    // 类型检查
+  }
+}
+```
+
+**优势：**
+- 面向对象设计，符合传统思维
+- 内置常用方法
+- 支持多态和继承
+
+**2. 丰富的生态集成**
+
+```typescript
+// LangChain: 预置组件直接使用
+const chain = RunnableSequence.from([
+  new ChatPromptTemplate({...}),
+  new ChatOpenAI({...}),
+  new JsonOutputParser(),
+  new Calculator(),
+]);
+```
+
+**优势：**
+- 大量预置组件（Chains、Agents、Tools）
+- 生态成熟，文档丰富
+- 快速开发复杂应用
+
+#### LangChain 的劣势
+
+**1. 转换逻辑分散**
+
+```typescript
+// LangChain: 每个 Provider 独立实现转换
+class ChatOpenAI extends BaseChatModel {
+  _convertMessagesToParams(messages: BaseMessage[]) {
+    // OpenAI 特定转换逻辑
+  }
+}
+
+class ChatAnthropic extends BaseChatModel {
+  _convertMessagesToParams(messages: BaseMessage[]) {
+    // Anthropic 特定转换逻辑（重复）
+  }
+}
+```
+
+**劣势：**
+- 代码重复
+- 维护困难
+- 容易出现不一致
+
+**2. 继承带来的复杂性**
+
+```typescript
+// LangChain: 复杂的继承层次
+BaseMessage
+  ├── HumanMessage
+  ├── AIMessage
+  │     └── AIMessageChunk
+  ├── SystemMessage
+  └── ToolMessage
+
+BaseChatModel (abstract)
+  ├── ChatOpenAI
+  ├── ChatAnthropic
+  └── ChatXxx
+```
+
+**劣势：**
+- 继承层次深，理解成本高
+- 难以修改基类
+- 组合灵活性差
+
+**3. 序列化开销**
+
+```typescript
+// LangChain: 序列化包含大量元数据
+{
+  "lc": 1,
+  "type": "constructor",
+  "id": ["langchain_core", "messages", "HumanMessage"],
+  "kwargs": {
+    "content": "Hello",  // 实际数据仅占 1/3
+    "additional_kwargs": {},
+    "response_metadata": {}
+  }
+}
+// 总大小 ~180 bytes，实际数据 ~60 bytes
+```
+
+**劣势：**
+- 存储开销大（3x）
+- 传输效率低
+- 跨系统兼容性差
+
+### 7.4 架构设计原则对比
+
+| 原则 | pi-ai | LangChain 1.x | 评价 |
+|------|-------|---------------|------|
+| **单一职责** | ✅ 转换集中 | ⚠️ 转换分散 | pi-ai 更好 |
+| **开闭原则** | ✅ 添加 Provider 无需改代码 | ⚠️ 需继承基类 | pi-ai 更好 |
+| **里氏替换** | N/A（无继承） | ✅ 子类可替换 | LangChain 更好 |
+| **接口隔离** | ✅ 细粒度接口 | ⚠️ 粗粒度基类 | pi-ai 更好 |
+| **依赖倒置** | ✅ 依赖抽象协议 | ✅ 依赖抽象基类 | 相当 |
+| **组合复用** | ✅ 函数组合 | ⚠️ 继承复用 | pi-ai 更好 |
+| **迪米特法则** | ✅ 最小依赖 | ⚠️ 依赖基类 | pi-ai 更好 |
+
+### 7.5 综合评价
+
+| 维度 | pi-ai | LangChain 1.x | 胜出 |
+|------|-------|---------------|------|
+| **架构简洁性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | pi-ai |
+| **可扩展性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | pi-ai |
+| **生态丰富度** | ⭐⭐ | ⭐⭐⭐⭐⭐ | LangChain |
+| **学习曲线** | ⭐⭐⭐⭐ | ⭐⭐⭐ | pi-ai |
+| **维护成本** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | pi-ai |
+| **开发效率** | ⭐⭐⭐ | ⭐⭐⭐⭐⭐ | LangChain |
+| **性能** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ | pi-ai |
+| **互操作性** | ⭐⭐⭐⭐⭐ | ⭐⭐ | pi-ai |
+
+### 7.6 架构选择建议
+
+**从纯架构设计角度，pi-ai 的方式更优：**
+
+1. **更符合现代架构原则**：组合优于继承，单一职责，接口隔离
+2. **更好的可维护性**：转换逻辑集中，修改一处全局生效
+3. **更高的性能**：纯 JSON 序列化，无元数据开销
+4. **更好的互操作性**：跨系统、跨语言兼容
+5. **更简洁的代码**：无复杂继承层次，易于理解
+
+**但 LangChain 在特定场景下更实用：**
+
+1. **快速开发**：丰富的预置组件，开箱即用
+2. **生态锁定**：如果已在 LangChain 生态内，迁移成本高
+3. **团队偏好**：OOP 团队可能更习惯类继承
+
+**最终建议：**
+
+- **新项目，追求架构质量**：选择 pi-ai
+- **已有 LangChain 项目**：继续使用 LangChain，或逐步迁移
+- **快速原型**：LangChain 更快
+- **生产系统**：pi-ai 更可控、更可维护
+
+---
+
+## 8. 总结
 
 | 维度 | pi-ai | LangChain 1.x |
 |------|-------|---------------|
