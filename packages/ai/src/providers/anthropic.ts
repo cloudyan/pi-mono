@@ -319,10 +319,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 					}
 				} else if (event.type === "content_block_delta") {
 					if (event.delta.type === "text_delta") {
+						// blocks 数组跟踪多个内容块（文本、工具调用、思考等）
+						// 由于 LLM 流式响应是交错传输的，需根据 event.index 定位到对应块
 						const index = blocks.findIndex((b) => b.index === event.index);
 						const block = blocks[index];
 						if (block && block.type === "text") {
 							block.text += event.delta.text;
+
+							// push 事件：delta 是增量，partial 是修改后的完整 output
 							stream.push({
 								type: "text_delta",
 								contentIndex: index,

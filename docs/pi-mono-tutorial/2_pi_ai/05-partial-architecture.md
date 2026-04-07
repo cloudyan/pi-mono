@@ -94,9 +94,9 @@ async function streamAssistantResponse(...) {
           partialMessage = event.partial;
           // 同步更新维护的数据
           context.messages[context.messages.length - 1] = partialMessage;
-          await emit({ 
-            type: "message_update", 
-            message: { ...partialMessage } 
+          await emit({
+            type: "message_update",
+            message: { ...partialMessage }
           });
         }
         break;
@@ -167,7 +167,9 @@ case "error":
 
 **价值**：即使请求中断，已生成的内容不会丢失
 
-## 架构分层
+## 架构分层与数据流程
+
+### 架构图
 
 ```
 ┌─────────────────────────────────────────┐
@@ -204,6 +206,132 @@ case "error":
 | **AI 层** | 解析 SSE，构建 Partial 对象 | `event.partial` |
 | **Agent 层** | 管理 Partial 状态，同步到维护的数据 | `partialMessage` |
 | **UI 层** | 订阅事件，渲染 Partial 内容 | 显示给用户 |
+
+### Partial 生成流程（核心机制）
+
+`partial` 的生成发生在 **AI 层（pi-ai）的 Provider 实现**中。以下是完整的数据流程：
+
+#### 1. 初始化 output 对象
+
+```typescript
+// packages/ai/src/providers/anthropic.ts（第 207-223 行）
+// packages/ai/src/providers/openai-responses.ts（第 70-86 行）
+
+const output: AssistantMessage = {
+  role: "assistant",
+  content: [],
+  api: model.api as Api,
+  provider: model.provider,
+  model: model.id,
+  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+  stopReason: "stop",
+  timestamp: Date.now(),
+};
+```
+
+#### 2. 流式处理与 partial 更新
+
+```typescript
+// packages/ai/src/providers/anthropic.ts（第 260-331 行）
+
+// 发送 start 事件，传递初始 partial
+stream.push({ type: "start", partial: output });
+
+for await (const event of anthropicStream) {
+  if (event.type === "content_block_delta") {
+    if (event.delta.type === "text_delta") {
+
+      // blocks 数组跟踪多个内容块（文本、工具调用、思考等）
+      // 由于 LLM 流式响应是交错传输的，需根据 event.index 定位到对应块
+      const index = blocks.findIndex((b) => b.index === event.index);
+      const block = blocks[index];
+
+      // 关键：原地修改 output 对象
+      block.text += event.delta.text;
+
+      // push 事件：delta 是增量，partial 是修改后的完整 output
+      stream.push({
+        type: "text_delta",
+        contentIndex: index,
+        delta: event.delta.text,  // ← 本次增量："H"
+        partial: output,           // ← 全量快照：{ content: [{ text: "Hello" }] }
+      });
+    }
+  }
+}
+```
+
+#### 3. 关键机制说明
+
+| 步骤 | 操作 | 说明 |
+|------|------|------|
+| **初始化** | 创建 `output` 对象 | 空的 `AssistantMessage`，作为 partial 的载体 |
+| **流式接收** | 接收 LLM 的 SSE 流 | 逐字节接收增量数据 |
+| **原地修改** | 修改 `output` 对象 | `block.text += event.delta.text` |
+| **推送事件** | `stream.push({ ..., partial: output })` | 传递当前完整状态作为 partial |
+| **传递引用** | `partial: output` | 传递的是对象引用，不是拷贝 |
+
+**核心洞察**：`output` 对象在流式过程中被**原地修改**，每次 `push` 时传递的是**当前状态的引用**，这就是 `partial` 成为"全量快照"的原因。
+
+#### 4. 跨层传递流程
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  AI 层（Provider）                                           │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │ 1. 创建 output 对象                                    │ │
+│  │    output = { role: "assistant", content: [] }        │ │
+│  │                                                       │ │
+│  │ 2. 流式循环                                            │ │
+│  │    for await (event of llmStream) {                   │ │
+│  │      block.text += event.delta  ← 原地修改 output      │ │
+│  │                                                       │ │
+│  │      stream.push({                                    │ │
+│  │        type: "text_delta",                            │ │
+│  │        delta: event.delta,      ← 增量                │ │
+│  │        partial: output          ← 全量快照            │ │
+│  │      });                                              │ │
+│  │    }                                                  │ │
+│  └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Agent 层（AgentLoop）                                       │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  partialMessage = event.partial  ← 接收全量快照        │ │
+│  │                                                       │ │
+│  │  emit({                                               │ │
+│  │    type: "message_update",                            │ │
+│  │    message: { ...partialMessage }  ← 传给 UI 层       │ │
+│  │  });                                                  │ │
+│  └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  UI 层                                                       │
+│  ┌───────────────────────────────────────────────────────┐ │
+│  │  event.message.content[0].text  ← 直接使用全量数据     │ │
+│  │  无需自己拼接增量                                       │ │
+│  └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 5. 代码位置汇总
+
+| Provider | 文件路径 | 关键代码行 |
+|----------|----------|-----------|
+| Anthropic | `packages/ai/src/providers/anthropic.ts` | 260, 280-286, 324-331 |
+| OpenAI Responses | `packages/ai/src/providers/openai-responses.ts` | 101, 297, 302, 313 |
+| Amazon Bedrock | `packages/ai/src/providers/amazon-bedrock.ts` | 170, 282, 304, 308 |
+| Google Gemini | `packages/ai/src/providers/google-gemini-cli.ts` | 479, 596, 665 |
+| Mistral | `packages/ai/src/providers/mistral.ts` | 78, 318, 341 |
+
+所有 Provider 遵循相同的模式：
+1. 创建 `output` 对象
+2. 流式过程中**原地修改** `output`
+3. 每次 push 事件时传递 `partial: output`
 
 ## 与 LangChain 的对比
 
@@ -280,7 +408,7 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
   // 生产者：推送事件（携带 partial）
   push(event: T): void {
     if (this.done) return;
-    
+
     if (this.isComplete(event)) {
       this.done = true;
       this.resolveFinalResult(this.extractResult(event));

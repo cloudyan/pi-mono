@@ -292,12 +292,12 @@ async function streamAssistantResponse(
 			case "toolcall_delta":
 			case "toolcall_end":
 				if (partialMessage) {
-					partialMessage = event.partial;
+					partialMessage = event.partial; // pi-ai 层的 partial（全量快照），在 pi-ai 层的各个 Provider 中实现
 					context.messages[context.messages.length - 1] = partialMessage;
 					await emit({
 						type: "message_update",
 						assistantMessageEvent: event,
-						message: { ...partialMessage },
+						message: { ...partialMessage }, // 全量快照
 					});
 				}
 				break;

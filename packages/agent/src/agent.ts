@@ -463,7 +463,7 @@ export class Agent {
 				break;
 
 			case "message_update":
-				this._state.streamMessage = event.message;
+				this._state.streamMessage = event.message; // 全量快照（Partial）
 				break;
 
 			case "message_end":
