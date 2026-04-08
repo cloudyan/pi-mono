@@ -15,6 +15,30 @@
 
 pi-coding-agent 是一个**AI 驱动的编码助手**，它在 pi-agent 和 pi-tui 的基础上构建，专为软件开发场景设计。
 
+### 架构依赖
+
+pi-coding-agent 不是从零构建的，它站在 pi-mono 生态的肩膀上：
+
+```
+pi-coding-agent (@mariozechner/pi)
+    ├── pi-tui (@mariozechner/pi-tui)
+    │   ├── pi-agent (@mariozechner/pi-agent-core)
+    │   │   └── pi-ai (@mariozechner/pi-ai)
+    │   └── pi-ai
+    └── 自身核心功能
+        ├── 代码工具集 (read/write/edit/bash/grep/find/ls)
+        ├── 会话管理 (JSONL 树形结构)
+        ├── 扩展系统 (Extensions/Skills/Themes)
+        └── 多种运行模式 (interactive/print/JSON/RPC)
+```
+
+**分层设计的优势**：
+
+1. **代码复用**：pi-agent 的改进自动惠及 pi-coding-agent
+2. **专注单一职责**：pi-agent 专注运行时，pi-coding-agent 专注编码场景
+3. **可替换性**：理论上可以替换 pi-tui 为其他 UI 层（如 Web UI）
+4. **独立演进**：各层可以独立发展，不影响其他层
+
 ### 核心能力
 
 ```

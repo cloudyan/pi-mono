@@ -21,6 +21,38 @@
 
 每篇文章都配有图解和代码示例，建议边看边动手实验。
 
+## 快速选择指南
+
+不知道该从哪个包开始？根据你的需求选择：
+
+| 你的需求 | 推荐包 | 说明 |
+|---------|--------|------|
+| **构建自定义 AI 应用** | [pi-agent](3_pi_agent/) | 提供 Agent 运行时，无 UI 绑定，完全可控 |
+| **终端编码助手** | [pi-coding-agent](5_pi_coding_agent/) | 开箱即用，交互式 TUI，代码工具齐全 |
+| **统一 LLM API** | [pi-ai](2_pi_ai/) | 多提供商支持，流式响应，工具调用 |
+| **终端 UI 组件** | [pi-tui](4_pi_tui/) | 差分渲染，组件化设计，可构建自定义 TUI |
+| **Web 聊天界面** | [pi-web-ui](6_pi_web_ui/) | Web Components，框架无关，可嵌入任何项目 |
+| **Slack Bot** | [pi-mom](8_mom/) | 将 pi-coding-agent 接入 Slack |
+| **GPU Pod 管理** | [pi-pods](7_pods/) | 管理 vLLM 部署 |
+
+### 包关系速查
+
+```
+应用层:    pi-coding-agent, pi-mom
+    ↓
+UI层:      pi-tui, pi-web-ui
+    ↓
+运行时层:  pi-agent
+    ↓
+基础层:    pi-ai
+```
+
+**选择建议**：
+- 需要**编程集成** → 使用 **pi-agent** + **pi-ai**
+- 需要**终端工具** → 直接使用 **pi-coding-agent**
+- 需要**自定义 UI** → 基于 **pi-agent** + **pi-tui** 构建
+- 需要**Web 界面** → 基于 **pi-agent** + **pi-web-ui** 构建
+
 ## 目录列表
 
 ### 篇章一：项目概览 :point_down:

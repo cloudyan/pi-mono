@@ -116,6 +116,11 @@ graph TD
     AGENT --> AI
 ```
 
+- 基础层: pi-ai（统一 LLM API）
+- 运行时层: pi-agent（Agent 运行时）
+- UI层: pi-tui（终端 UI）
+- 应用层: pi-coding-agent（完整应用）
+
 ### 具体依赖关系
 
 **pi-ai** - 无内部依赖，纯基础层

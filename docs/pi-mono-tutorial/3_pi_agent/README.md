@@ -2,6 +2,77 @@
 
 > 深入理解 @mariozechner/pi-agent-core —— 生产级 Agent 运行时
 
+## 定位说明
+
+pi-agent 在 pi-mono 生态中的位置：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  应用层: pi-coding-agent (终端编码助手)                    │
+│  - 交互式 TUI、会话管理、代码工具、扩展系统                 │
+├─────────────────────────────────────────────────────────┤
+│  运行时层: pi-agent (本包)                                │
+│  - 状态管理、工具执行、事件流、干预机制                     │
+├─────────────────────────────────────────────────────────┤
+│  基础层: pi-ai                                           │
+│  - 多提供商 LLM API 统一封装                              │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 何时使用 pi-agent？
+
+- 你需要构建**自定义的 Agent 应用**（如 IDE 插件、聊天机器人、自动化工具）
+- 你需要**完全控制 Agent 的行为和 UI**，不受终端界面限制
+- 你需要在 pi-coding-agent 之上**构建更复杂的系统**
+- 你需要**程序化集成** Agent 能力到自己的应用中
+
+### 何时使用 pi-coding-agent？
+
+- 你需要一个**开箱即用的终端编码助手**
+- 你需要**交互式 TUI、会话持久化、代码工具**
+- 你**不需要自定义 Agent 行为**，只需要使用现成的工具
+- 你偏好**命令行交互**而非编程集成
+
+### 两者关系
+
+```mermaid
+graph TD
+    subgraph "你的应用"
+        YourApp[自定义 Agent 应用]
+        UseCLI[使用 pi CLI]
+    end
+
+    subgraph "运行时层"
+        Agent[pi-agent-core]
+    end
+
+    subgraph "应用层"
+        CodingAgent[pi-coding-agent]
+    end
+
+    subgraph "基础层"
+        AI[pi-ai]
+    end
+
+    YourApp --> Agent
+    UseCLI --> CodingAgent
+    CodingAgent --> Agent
+    Agent --> AI
+
+    style YourApp fill:#e8f5e9,stroke:#2e7d32,color:#000
+    style UseCLI fill:#e3f2fd,stroke:#1565c0,color:#000
+    style Agent fill:#fff3e0,stroke:#ef6c00,color:#000
+    style CodingAgent fill:#f3e5f5,stroke:#6a1b9a,color:#000
+    style AI fill:#fafafa,stroke:#666,color:#000
+```
+
+**pi-coding-agent 基于 pi-agent 构建**，它使用 pi-agent 提供的核心能力（状态管理、工具执行、事件流），并在此基础上增加了：
+- 终端 TUI 界面（基于 pi-tui）
+- 代码专用工具（read/write/edit/bash/grep/find/ls）
+- 会话持久化（JSONL 树形结构）
+- 扩展系统（Extensions/Skills/Themes）
+- 多种运行模式（interactive/print/JSON/RPC）
+
 ## 系列概览
 
 本系列带你深入理解 pi-agent 的设计原理和最佳实践。pi-agent 是一个**有状态的对话管理器**，在 pi-ai 的基础上提供了：
@@ -110,7 +181,7 @@ const agent = new Agent({
 
 // 订阅事件
 agent.subscribe((event) => {
-  if (event.type === "message_update" && 
+  if (event.type === "message_update" &&
       event.assistantMessageEvent.type === "text_delta") {
     process.stdout.write(event.assistantMessageEvent.delta);
   }

@@ -491,6 +491,82 @@ agent.subscribe((event) => {
 await agent.prompt("计算 123 * 456");
 ```
 
+## 与 pi-coding-agent 的关系
+
+同一个场景，使用 pi-agent 和 pi-coding-agent 的对比：
+
+### 场景：读取文件并总结内容
+
+**使用 pi-agent（编程方式，完全可控）**：
+
+```typescript
+import { Agent } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
+import fs from "fs";
+
+// 1. 创建 Agent 实例
+const agent = new Agent({
+  initialState: {
+    systemPrompt: "你是一个文件分析助手。",
+    model: getModel("anthropic", "claude-sonnet-4-20250514"),
+    tools: [{
+      name: "read_file",
+      label: "读取文件",
+      description: "读取文件内容",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: async (id, params) => {
+        const content = await fs.readFile(params.path, "utf-8");
+        return { content: [{ type: "text", text: content }], details: {} };
+      },
+    }],
+  },
+});
+
+// 2. 订阅事件（自行处理 UI 更新）
+agent.subscribe((event) => {
+  if (event.type === "message_update") {
+    process.stdout.write(event.assistantMessageEvent.delta);
+  }
+  if (event.type === "tool_execution_start") {
+    console.log(`\n[工具] 开始读取: ${event.toolName}`);
+  }
+});
+
+// 3. 发送消息
+await agent.prompt("读取 README.md 并总结内容");
+```
+
+**使用 pi-coding-agent（CLI 方式，开箱即用）**：
+
+```bash
+# 直接运行命令
+pi "读取 README.md 并总结内容"
+```
+
+或编程方式：
+
+```typescript
+import { createAgentSession } from "@mariozechner/pi-coding-agent";
+
+const session = await createAgentSession();
+
+// TUI 自动显示文件内容和回复
+await session.prompt("读取 README.md 并总结内容");
+```
+
+### 对比总结
+
+| 维度 | pi-agent | pi-coding-agent |
+|------|----------|-----------------|
+| **代码量** | 较多（需自行实现工具和 UI） | 极少（内置工具和 TUI） |
+| **灵活性** | 高（完全可控） | 中（通过扩展系统定制） |
+| **适用场景** | 自定义应用、IDE 插件 | 终端编码、快速任务 |
+| **学习成本** | 较高（需理解 Agent 机制） | 低（开箱即用） |
+
+**选择建议**：
+- 需要**完全控制** Agent 行为 → 使用 **pi-agent**
+- 需要**快速使用**编码助手 → 使用 **pi-coding-agent**
+
 ## 与 pi-ai 的关系
 
 ```mermaid
