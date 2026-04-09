@@ -77,9 +77,14 @@ UI层:      pi-tui, pi-web-ui
 - [13. 终端交互与输入处理](4_pi_tui/03-interaction.md)
 
 ### 篇章五：pi-coding-agent 编码 Agent :point_down:
-- [14. pi-coding-agent 架构解析](5_pi_coding_agent/01-architecture.md) ✅
-- [15. 会话管理与分支机制](5_pi_coding_agent/02-session-branching.md) ✅
-- [16. 提示模板与主题定制](5_pi_coding_agent/03-prompts-theming.md) ✅
+- [14. pi-coding-agent 文档导读](5_pi_coding_agent/README.md)
+- [15. Coding Agent 核心概念](5_pi_coding_agent/01-core-concepts.md)
+- [16. 架构设计与运行模式](5_pi_coding_agent/02-architecture.md)
+- [17. 工具系统详解](5_pi_coding_agent/03-tools.md)
+- [18. 会话管理、分支与持久化](5_pi_coding_agent/04-session-management.md)
+- [19. 交互模式与 TUI](5_pi_coding_agent/05-interactive-mode.md)
+- [20. 高级功能、定制与最佳实践](5_pi_coding_agent/06-advanced-features.md)
+- [补充：早期专题文章](5_pi_coding_agent/README.md#补充专题)
 
 ### 篇章六：pi-web-ui Web 组件 :point_down:
 - [17. pi-web-ui 设计：mini-lit 与 Tailwind v4](6_pi_web_ui/01-design.md) ✅

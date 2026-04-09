@@ -43,10 +43,15 @@
   - [1. 核心概念](/pi-mono-tutorial/5_pi_coding_agent/01-core-concepts.md)
   - [2. 架构解析](/pi-mono-tutorial/5_pi_coding_agent/02-architecture.md)
   - [3. 工具系统](/pi-mono-tutorial/5_pi_coding_agent/03-tools.md)
-  - [4. 会话管理](/pi-mono-tutorial/5_pi_coding_agent/04-session-management.md)
-  - [5. 交互模式](/pi-mono-tutorial/5_pi_coding_agent/05-interactive-mode.md)
-  - [6. 高级功能](/pi-mono-tutorial/5_pi_coding_agent/06-advanced-features.md)
+  - [4. Skill 系统](/pi-mono-tutorial/5_pi_coding_agent/04-skill-system.md)
+  - [5. Extension 系统](/pi-mono-tutorial/5_pi_coding_agent/05-extension-system.md)
+  - [6. 会话管理](/pi-mono-tutorial/5_pi_coding_agent/06-session-management.md)
+  - [7. 交互模式](/pi-mono-tutorial/5_pi_coding_agent/07-interactive-mode.md)
+  - [8. 上下文管理](/pi-mono-tutorial/5_pi_coding_agent/08-context-management.md)
+  - [9. Prompt/主题定制](/pi-mono-tutorial/5_pi_coding_agent/09-prompts-theming.md)
+  - [10. 高级功能](/pi-mono-tutorial/5_pi_coding_agent/10-advanced-features.md)
   - 📖 扩展阅读
+    - [专题：会话树深度解析](/pi-mono-tutorial/5_pi_coding_agent/99-topics-session-branching.md)
     - 配置与设置
       - [Providers](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/providers-zh.md)
       - [自定义模型](/pi-mono-tutorial/5_pi_coding_agent/docs-zh/models-zh.md)

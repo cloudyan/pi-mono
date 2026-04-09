@@ -1,272 +1,195 @@
-# pi-coding-agent 系列教程
+# pi-coding-agent 文档导读
 
-> 深入理解 @mariozechner/pi —— AI 驱动的编码助手
+> 本目录聚焦 `packages/coding-agent`。这里按学习路径整理了主线教程，帮助你从概念理解到实际开发，逐步掌握 pi-coding-agent 的使用与扩展。
 
-## 系列概览
+---
 
-本系列带你深入理解 pi-coding-agent 的设计原理和最佳实践。pi-coding-agent 是一个**AI 驱动的编码助手**，在 pi-agent 和 pi-tui 的基础上构建，专为软件开发场景设计。
+## 目录结构
 
-### 核心能力
+### 主线文档（核心必读）
 
-- ✅ **代码理解** —— 读取、搜索、分析代码库
-- ✅ **代码编写** —— 创建、编辑、重构代码
-- ✅ **调试修复** —— 分析错误、定位问题、修复 Bug
-- ✅ **多种运行模式** —— interactive、headless、oneshot、file、github-pr
-- ✅ **丰富工具集** —— read、write、edit、bash、grep、ast-grep、lsp 等
-- ✅ **会话管理** —— 自动保存、恢复、历史记录
+主线文档覆盖从概念到实现，再到定制与扩展的完整学习路径。
 
-## 阅读路径
+| 顺序 | 文档 | 内容概要 | 适合谁 |
+|------|------|----------|--------|
+| 1 | [01-core-concepts.md](01-core-concepts.md) | 核心概念：Agent、Session、Conversation、Message、Skill、Extension | 初学者 |
+| 2 | [02-architecture.md](02-architecture.md) | 架构设计：SessionManager、AgentSession、ResourceLoader、运行模式 | 初学者 / 进阶读者 |
+| 3 | [03-tools.md](03-tools.md) | 工具系统详解：7 个核心工具、工具执行流程、自定义工具 | 进阶读者 |
+| 4 | [04-skill-system.md](04-skill-system.md) | Skill 系统完整指南：创建、发现、使用、分享 | 进阶读者 / Skill 开发者 |
+| 5 | [05-extension-system.md](05-extension-system.md) | Extension 系统开发指南：API、生命周期、最佳实践 | Extension 开发者 |
 
-### 核心教程（必读）
+### 进阶文档（深入学习）
 
-| 章节 | 难度 | 预计时间 | 核心内容 |
-|------|------|---------|---------|
-| **[00-README-zh.md](00-README-zh.md)** | 入门 | 15 分钟 | 官方 README 中文翻译，快速了解 pi-coding-agent |
-| **[01-core-concepts.md](01-core-concepts.md)** | 入门 | 20 分钟 | Agent Session、工具系统、运行模式、系统提示词 |
-| **[02-architecture.md](02-architecture.md)** | 进阶 | 25 分钟 | CLI 入口、运行模式详解、模式选择指南 |
-| **[03-tools.md](03-tools.md)** | 进阶 | 30 分钟 | 文件操作、代码搜索、LSP 工具、项目管理工具 |
-| **[04-session-management.md](04-session-management.md)** | 进阶 | 20 分钟 | 会话生命周期、自动保存、恢复、备份 |
-| **[05-interactive-mode.md](05-interactive-mode.md)** | 进阶 | 25 分钟 | TUI 组件、消息渲染、流式显示、快捷键 |
-| **[06-advanced-features.md](06-advanced-features.md)** | 专家 | 25 分钟 | 自定义工具、插件系统、性能优化、安全实践、测试策略 |
+| 顺序 | 文档 | 内容概要 | 适合谁 |
+|------|------|----------|--------|
+| 6 | [06-session-management.md](06-session-management.md) | 会话管理：生命周期、持久化、分支与恢复 | 进阶读者 |
+| 7 | [07-interactive-mode.md](07-interactive-mode.md) | 交互模式与 TUI：组件设计、消息渲染、快捷键 | 交互模式开发者 |
+| 8 | [08-context-management.md](08-context-management.md) | 上下文管理：Token 预算、自动压缩、会话树 | 需要优化长会话性能时 |
+| 9 | [09-prompts-theming.md](09-prompts-theming.md) | Prompt/主题/模型定制：行为定制、界面美化 | 想要个性化配置的用户 |
+| 10 | [10-advanced-features.md](10-advanced-features.md) | 高级功能：自定义工具、插件系统、性能优化 | 专家用户 |
 
-### 阅读建议
+### 专题与参考（按需阅读）
 
-**如果你是初学者**：
-1. 按顺序阅读 01 → 02 → 03
-2. 每章配合代码示例实践
-3. 完成后再阅读 04、05、06
+| 文档 | 内容概要 | 适合什么时候看 |
+|------|----------|----------------|
+| [00-README-zh.md](00-README-zh.md) | 官方 README 中文整理 | 需要参考早期文档时 |
+| [99-topics-session-branching.md](99-topics-session-branching.md) | 会话树与分支机制深度解析 | 需要理解会话树内部实现时 |
 
-**如果你是进阶开发者**：
-1. 快速浏览 01 了解基本概念
-2. 重点阅读 02、03 理解核心机制
-3. 04、05、06 按需查阅
+---
 
-**如果你是专家开发者**：
-1. 直接阅读 02、06
-2. 参考源码深入理解
-3. 贡献最佳实践案例
+## 主线文档说明
 
-## 核心概念速查
+按照"先对齐事实，再收敛主线，再弱化旧文"的原则，主线文档进行了重新梳理：
 
-| 概念 | 说明 | 所在章节 |
-|------|------|---------|
-| Agent Session | 管理一次完整的编码任务 | 01 |
-| 工具系统 | 让 AI 能够实际操作代码库 | 01、03 |
-| 运行模式 | interactive、headless、oneshot 等 | 01、02 |
-| 系统提示词 | 定义 AI 的行为和能力 | 01 |
-| 会话持久化 | 自动保存和恢复会话状态 | 01、04 |
-| TUI | 交互式终端界面 | 05 |
-| 插件系统 | 扩展功能的钩子机制 | 06 |
+### 主线覆盖范围
+
+- **01 核心概念**：Agent、Session、Conversation、Message、Skill、Extension 的概念关系
+- **02 架构设计**：整体架构、运行模式（text/json/rpc）、资源加载、扩展点
+- **03 工具系统**：内置工具、工具执行流程、自定义工具开发
+- **04 Skill 系统**：Skill 创建、发现、使用、分享
+- **05 Extension 系统**：Extension 开发、API、生命周期、发布
+- **06 会话管理**：会话生命周期、持久化、分支与恢复
+- **07 交互模式**：TUI 组件、消息渲染、输入处理、快捷键
+- **08 上下文管理**：Token 预算、自动压缩、会话树结构
+- **09 Prompt/主题**：系统提示词定制、主题美化、模型切换
+- **10 高级功能**：自定义工具、插件系统、性能优化
+
+### 文档约定
+
+- **代码示例标注来源**：`[真实API]`、`[概念性示例]`、`[简化示意]`
+- **关键概念提供源码路径**：如 `packages/coding-agent/src/core/agent-session.ts`
+- **虚构的模式/工具已删除**：仅保留真实存在的实现
+
+---
+
+## 学习路径
+
+### 新手用户（第一次使用 pi）
+
+1. 阅读 **01 核心概念**（理解基本概念）
+2. 阅读 **02 架构设计**（了解运行模式）
+3. 阅读 **03 工具系统**（了解可用工具）
+4. 实践：安装 Skill、使用 `/skill:name` 命令
+
+### 进阶用户（想要定制 pi）
+
+1. 阅读 **01-05**（理解基础）
+2. 阅读 **06 会话管理**（理解会话持久化和分支）
+3. 阅读 **09 Prompt/主题**（个性化配置）
+4. 实践：编写一个自定义 Skill
+
+### 开发者（想要开发 Extension）
+
+1. 阅读 **01-05**（理解基础）
+2. 阅读 **07 交互模式**（理解 TUI 架构）
+3. 阅读 **10 高级功能**（自定义工具、插件）
+4. 实践：开发一个自定义工具 Extension
+
+### 专家用户（深度优化）
+
+1. 阅读 **08 上下文管理**（Token 预算、压缩策略）
+2. 阅读 **10 高级功能**（性能优化、最佳实践）
+3. 阅读 **99 专题**（会话树深度解析）
+
+---
+
+## 关键修正说明
+
+本次文档修订的主要变化：
+
+### 主要修正
+
+| 项目 | 修正前 | 修正后 |
+|------|--------|--------|
+| 运行模式 | `text`/`interactive`/`headless`/`oneshot`/`file`/`github-pr` | `text`/`json`/`rpc` |
+| API 示例 | 无标注，易混淆 | 标注 `[真实API]` 或 `[概念性示例]` |
+| 工具列表 | 11 个虚构工具 | 7 个真实工具 |
+| Skill 系统 | 未完整覆盖 | 新增完整章节 |
+| Extension 系统 | 未完整覆盖 | 新增完整章节 |
+| 源码引用 | 缺失或过时 | 为每个核心概念提供真实路径 |
+
+### 新增章节
+
+- **04 Skill 系统**：完整的 Skill 创建、使用、分享指南
+- **05 Extension 系统**：Extension API、生命周期、开发实践
+- **会话管理架构**：Session 状态流转、持久化、分支管理
+- **资源加载架构**：ResourceLoader 机制、热更新支持
+
+### 专题与参考
+
+以下早期文档和专题文档不再作为主线入口，但保留参考价值：
+
+- `00-README-zh.md` - 官方 README 的中文整理
+- `99-topics-session-branching.md` - 会话分支专题（内容已并入 06/08）
+- `09-prompts-theming.md` - Prompt 和 Theme 专题（已移至进阶文档）
+
+---
 
 ## 快速开始
 
 ### 安装
 
 ```bash
-npm install -g @mariozechner/pi
+npm install -g @pi/coding-agent
 ```
 
-### 基础使用
+### 基本使用
 
 ```bash
-# 启动交互式会话
+# 交互模式
 pi
 
-# 执行单次任务
-pi --prompt "修复所有 ESLint 错误"
+# 单次执行
+pi --mode text "解释一下 React hooks"
 
-# 从文件读取任务
-pi --file task.md
-
-# 使用特定模型
-pi --model anthropic:claude-sonnet-4-20250514
+# JSON 输出
+pi --mode json "创建一个 Todo 组件"
 ```
 
-### 编程使用
+### 安装 Skill
 
-```typescript
-import { createAgentSession } from "@mariozechner/pi";
-
-async function main() {
-  const session = await createAgentSession({
-    name: "my-task",
-  });
-
-  // 发送消息
-  const response = await session.sendMessage("帮我优化这段代码");
-  console.log(response.text);
-
-  // 查看工具调用
-  console.log(response.toolCalls);
-
-  // 保存会话
-  await session.save();
-}
-
-main();
-```
-
-## 运行模式
-
-| 模式 | 用途 | 命令 |
-|------|------|------|
-| **interactive** | 交互式对话 | `pi` |
-| **headless** | 自动化脚本 | `pi --mode headless --prompt "..."` |
-| **oneshot** | 单次任务 | `pi --mode oneshot --prompt "..."` |
-| **file** | 批量处理 | `pi --mode file --file tasks.md` |
-| **github-pr** | PR 审查 | `pi --mode github-pr --pr 123` |
-
-## 工具列表
-
-### 文件操作
-- `read` —— 读取文件内容
-- `write` —— 创建或覆盖文件
-- `edit` —— 精确编辑文件
-- `bash` —— 执行命令行命令
-
-### 代码搜索
-- `grep` —— 文本搜索
-- `ast-grep` —— AST 搜索
-- `glob` —— 文件匹配
-
-### 开发工具
-- `lsp-diagnostics` —— 获取类型错误
-- `lsp-symbols` —— 获取符号列表
-- `skill` —— 调用 Skill 系统
-
-### 项目管理
-- `git` —— Git 操作
-- `github` —— GitHub API
-
-## 源码位置
-
-- **源码**: `packages/coding-agent/src/` 目录
-- **测试**: `packages/coding-agent/test/` 目录
-- **核心**: `packages/coding-agent/src/core/` 目录
-- **模式**: `packages/coding-agent/src/modes/` 目录
-- **工具**: `packages/coding-agent/src/core/tools/` 目录
-
-## 相关资源
-
-- **pi-agent 系列**: [../3_pi_agent/README.md](../3_pi_agent/README.md)
-- **pi-tui 系列**: [../4_pi_tui/README.md](../4_pi_tui/README.md)
-- **pi-ai 系列**: [../2_pi_ai/README.md](../2_pi_ai/README.md)
-- **API 参考**: 查看源码中的 JSDoc 注释
-- **示例项目**: 参考 `packages/coding-agent/test/` 中的测试用例
-
-## 术语统一表
-
-| 英文术语 | 中文翻译 | 说明 |
-|---------|---------|------|
-| Session | 会话 | 一次完整的编码任务 |
-| Tool | 工具 | AI 可以执行的操作 |
-| Mode | 模式 | 运行方式 |
-| Interactive | 交互式 | TUI 界面 |
-| Headless | 无头模式 | 无界面，适合自动化 |
-| Oneshot | 单次模式 | 执行单个任务 |
-| Plugin | 插件 | 扩展功能 |
-| Hook | 钩子 | 事件监听机制 |
-
-## 学习建议
-
-1. **先理解概念，再看代码**
-   - 每章先通读理解概念
-   - 再对照源码深入理解
-
-2. **动手实践**
-   - 每章都有代码示例
-   - 建议自己运行一遍
-
-3. **从简单到复杂**
-   - 先使用 CLI 工具
-   - 再编程使用 API
-   - 最后自定义工具
-
-4. **参考测试用例**
-   - `packages/coding-agent/test/` 中有丰富的测试用例
-   - 是学习 API 用法的最佳参考
-
-## 常见问题
-
-**Q: pi-coding-agent 和 pi-agent 有什么区别？**
-
-A: pi-agent 是通用的对话管理器，pi-coding-agent 是在其基础上针对编码场景优化的版本，提供了丰富的代码操作工具和多种运行模式。
-
-**Q: 如何添加自定义工具？**
-
-A: 参考 [06-advanced-features.md](06-advanced-features.md) 中的"自定义工具"章节，实现 AgentTool 接口并注册即可。
-
-**Q: 如何在 CI/CD 中使用？**
-
-A: 使用 headless 模式：
 ```bash
-pi --mode headless --prompt "检查代码质量" --output json
+# 列出可用 Skills
+pi skill list
+
+# 安装 Skill
+pi skill install @pi/skill-git
+
+# 使用 Skill
+/skill:git commit
 ```
-
-**Q: 如何恢复之前的会话？**
-
-A: 使用 `--session` 参数：
-```bash
-pi --session my-task
-```
-
-**Q: 如何限制 AI 的操作范围？**
-
-A: 配置安全选项：
-```typescript
-const session = await createAgentSession({
-  security: {
-    allowedPaths: ["src/**"],
-    deniedPaths: [".env"],
-  },
-});
-```
-
-## 最佳实践
-
-### ✅ 应该做的
-
-1. **使用有意义的会话名**
-   ```bash
-   pi --session refactor-auth
-   ```
-
-2. **选择合适的运行模式**
-   ```bash
-   # 日常开发
-   pi
-   
-   # CI/CD
-   pi --mode headless
-   ```
-
-3. **配置安全选项**
-   ```typescript
-   security: {
-     allowedPaths: ["src/**"],
-     deniedPaths: [".env"],
-   }
-   ```
-
-### ❌ 避免的错误
-
-1. **在会话中存储敏感信息**
-   ```typescript
-   // ❌ 错误
-   session.context.custom = { apiKey: "..." };
-   ```
-
-2. **在 CI 中使用 interactive 模式**
-   ```bash
-   # ❌ 错误
-   pi --prompt "检查代码"
-   
-   # ✅ 正确
-   pi --mode headless --prompt "检查代码"
-   ```
 
 ---
 
-**开始阅读**: [01-core-concepts.md](01-core-concepts.md)
+## 贡献指南
 
-**最后更新**: 2026-03-18
+### 如何贡献
+
+1. **Fork 仓库** 并创建你的分支
+2. **提交更改** 并确保通过测试
+3. **创建 Pull Request** 并描述变更内容
+
+### 文档贡献
+
+- 文档中的代码示例需要与源码保持一致
+- 新增概念需要提供对应源码引用
+- 使用 `[真实API]`/`[概念性示例]`/`[简化示意]` 标注示例类型
+
+### 源码对应
+
+阅读时可以优先对照这些位置：
+
+| 目录 | 内容 |
+|------|------|
+| `packages/coding-agent/src/cli/` | CLI 入口与参数解析 |
+| `packages/coding-agent/src/core/` | 会话、模型、系统提示、上下文等核心逻辑 |
+| `packages/coding-agent/src/core/tools/` | 内置工具 |
+| `packages/coding-agent/src/skill/` | Skill 系统 |
+| `packages/coding-agent/src/extension/` | Extension 系统 |
+| `packages/coding-agent/src/ui/` | 交互界面 |
+
+---
+
+## 从哪里开始
+
+第一次阅读建议直接从 [01-core-concepts.md](01-core-concepts.md) 开始。
